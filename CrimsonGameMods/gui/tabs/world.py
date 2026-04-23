@@ -3256,13 +3256,47 @@ class DropsetTab(QWidget):
         preset_row.addStretch()
 
         preset_row.addWidget(QLabel(tr("Global Loot:")))
-        for mult, label in [(5, "5x"), (10, "10x"), (50, "50x"), (100, "100x")]:
-            btn = QPushButton(label)
-            btn.setToolTip(
-                f"Set ALL named drop sets to 100% rate, x{mult} quantity.\n"
-                f"Affects all {679} named sets (chests, factions, monsters, etc.)")
-            btn.clicked.connect(lambda checked, m=mult: self._dropset_global_boost(m))
-            preset_row.addWidget(btn)
+
+        preset_row.addWidget(QLabel(tr("Min Rate")))
+        self._boost_min_rate = QSpinBox()
+        self._boost_min_rate.setRange(1, 99)
+        self._boost_min_rate.setValue(10)
+        self._boost_min_rate.setSuffix(" %")
+        self._boost_min_rate.setMinimumWidth(82)
+        self._boost_min_rate.setMinimumHeight(26)
+        preset_row.addWidget(self._boost_min_rate)
+
+        preset_row.addWidget(QLabel(tr("Multiplier")))
+        self._boost_multiplier = QSpinBox()
+        self._boost_multiplier.setRange(1, 99)
+        self._boost_multiplier.setValue(1)
+        self._boost_multiplier.setSuffix(" x")
+        self._boost_multiplier.setMinimumWidth(82)
+        self._boost_multiplier.setMinimumHeight(26)
+        preset_row.addWidget(self._boost_multiplier)
+
+        preset_row.addWidget(QLabel(tr("Alpha")))
+        self._boost_alpha = QDoubleSpinBox()
+        self._boost_alpha.setRange(0.01, 0.99)
+        self._boost_alpha.setValue(0.05)
+        self._boost_alpha.setSingleStep(0.01)
+        self._boost_alpha.setDecimals(2)
+        self._boost_alpha.setMinimumWidth(82)
+        self._boost_alpha.setMinimumHeight(26)
+        preset_row.addWidget(self._boost_alpha)
+
+        boost_apply_btn = QPushButton(tr("Apply"))
+        boost_apply_btn.setToolTip(
+            tr("Apply logarithmic rate boost to ALL named drop sets.\n"
+               "\n"
+               "Rate: F(x) = min + (100−min)×ln(1+αx)/ln(1+100α)\n"
+               "  x = original rate %; output in [min%, 100%]\n"
+               "  Low alpha ≈ linear; high alpha ≈ steep ramp for low rates.\n"
+               "\n"
+               "Qty: each item’s quantity is multiplied by Multiplier.\n"
+               "Affects all named sets (chests, factions, monsters, etc.)."))
+        boost_apply_btn.clicked.connect(self._dropset_global_boost_formula)
+        preset_row.addWidget(boost_apply_btn)
 
         layout.addLayout(preset_row)
 
@@ -3757,6 +3791,74 @@ class DropsetTab(QWidget):
             f"Modified {len(modified)} drop sets:\n"
             f"  - All rates set to 100%\n"
             f"  - All quantities x{multiplier}\n\n"
+            f"Use 'Export as Mod' to save.")
+
+    def _dropset_global_boost_formula(self):
+        import math
+        if not self._dropset_editor:
+            QMessageBox.warning(self, tr("DropSets"), tr("Load drop set data first."))
+            return
+
+        min_rate = self._boost_min_rate.value()   # percent floor, 1–99
+        multiplier = self._boost_multiplier.value()  # qty multiplier only
+        alpha = self._boost_alpha.value()
+
+        summaries = self._dropset_editor.get_all_sets_summary(named_only=True)
+        count = len(summaries)
+
+        reply = QMessageBox.question(
+            self, tr("Global Loot Boost"),
+            f"Apply logarithmic rate boost to ALL {count} named drop sets?\n\n"
+            f"  Rate: F(x) = {min_rate} + (100−{min_rate})×ln(1+{alpha}x)/ln(1+{100*alpha:.2f})\n"
+            f"  Qty:  each quantity ×{multiplier}\n\n"
+            f"Affects chests, factions, monsters, quests — everything.\n"
+            f"Continue?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply != QMessageBox.Yes:
+            return
+
+        log_denom = math.log(1 + alpha * 100)  # formula max is always 100%
+
+        def boosted_rate(original_pct: float) -> int:
+            x = max(0.0, min(original_pct, 100.0))
+            if x <= 0:
+                new_pct = min_rate
+            else:
+                new_pct = min_rate + (100 - min_rate) * math.log(1 + alpha * x) / log_denom
+            return max(0, min(1_000_000, int(new_pct) * 10_000))
+
+        self._dropset_status.setText(f"Applying formula boost to {count} sets...")
+        QApplication.processEvents()
+
+        modified = []
+        for s in summaries:
+            ds = self._dropset_editor.parse_dropset(s["key"])
+            if not ds:
+                continue
+            for drop in ds.drops:
+                original_pct = drop.rates / 10_000
+                drop.rates = boosted_rate(original_pct)
+                drop.rates_100 = drop.rates // 10_000
+                base_min = max(drop.max_amt, 1)
+                base_max = max(drop.min_amt, 1)
+                drop.max_amt = min(base_min * multiplier, 999_999)
+                drop.min_amt = min(base_max * multiplier, 999_999)
+            modified.append(ds)
+            self._dropset_dirty_keys.add(s["key"])
+
+        self._dropset_modified = True
+        self._dropset_change_count += count
+        self._dropset_changes_label.setText(f"{self._dropset_change_count} change(s)")
+
+        if self._dropset_current_key is not None:
+            self._dropset_refresh_items()
+
+        self._dropset_status.setText(
+            f"Formula boost applied to {len(modified)} sets — rate [{min_rate}%→100%] α={alpha}, x{multiplier} qty")
+        QMessageBox.information(self, tr("Global Boost Applied"),
+            f"Modified {len(modified)} drop sets.\n\n"
+            f"  Rate: [{min_rate}%, 100%] logarithmic (α={alpha})\n"
+            f"  Qty multiplier: ×{multiplier}\n\n"
             f"Use 'Export as Mod' to save.")
 
     def _dropset_apply_to_selected(self):

@@ -1,0 +1,6 @@
+PySide6
+lz4
+cryptography
+Pillow
+pyinstaller
+crimson-rs

@@ -113,7 +113,7 @@ def find_save_files() -> List[dict]:
 
 
 from gui.tabs.items import DatabaseBrowserTab
-from gui.tabs.buffs_v319 import ItemBuffsTab
+from gui.tabs.buffs import ItemBuffsTab
 from gui.tabs.stacker import StackerTab
 try:
     from gui.tabs.dmm_webview import DmmWebViewTab, HAS_WEBENGINE

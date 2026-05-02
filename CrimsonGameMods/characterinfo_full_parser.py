@@ -139,17 +139,17 @@ def parse_entry(data, offset, end):
             for bi in range(40):
                 bool_fields[bi] = data[p + bi]
 
-            result['_isAttackable_offset'] = bool_start + 3
-            result['_isAttackable'] = data[bool_start + 3]
+            result['_invincibility_offset'] = bool_start + 0
+            result['_invincibility'] = data[bool_start + 0]
 
-            result['_isAggroTargetable_offset'] = bool_start + 4
-            result['_isAggroTargetable'] = data[bool_start + 4]
+            result['_isAttackable_offset'] = bool_start + 1
+            result['_isAttackable'] = data[bool_start + 1]
 
-            result['_sendKillEventOnDead_offset'] = bool_start + 17
-            result['_sendKillEventOnDead'] = data[bool_start + 17]
+            result['_isAggroTargetable_offset'] = bool_start + 2
+            result['_isAggroTargetable'] = data[bool_start + 2]
 
-            result['_invincibility_offset'] = bool_start + 20
-            result['_invincibility'] = data[bool_start + 20]
+            result['_isValid_offset'] = bool_start + 3
+            result['_isValid'] = data[bool_start + 3]
 
             result['_boolBlock'] = bool_fields
 

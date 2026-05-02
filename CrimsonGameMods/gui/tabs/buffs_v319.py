@@ -7492,17 +7492,10 @@ class ItemBuffsTab(QWidget):
 
             new_es_pabgh, new_es_pabgb = esp.serialize_all(es_records)
 
-            # DEPLOY equipslotinfo directly to 0059/ as a separate overlay.
-            # User-confirmed empirically (2026-04-21) that single-overlay
-            # bundling of iteminfo + equipslotinfo breaks UP v2 for guns on
-            # Kliff. v1.0.3 used split deployment (0058/ + 0059/) and it
-            # worked. Reverting to that.
-            self._buff_deploy_equipslotinfo_0059(gp_text, new_es_pabgb, new_es_pabgh)
-            # Clear any previously-staged equipslotinfo so _buff_apply_to_game
-            # does NOT bundle it into the iteminfo overlay alongside.
-            if hasattr(self, '_staged_equip_files') and self._staged_equip_files:
-                for k in ('equipslotinfo.pabgb', 'equipslotinfo.pabgh'):
-                    self._staged_equip_files.pop(k, None)
+            if not hasattr(self, '_staged_equip_files'):
+                self._staged_equip_files = {}
+            self._staged_equip_files['equipslotinfo.pabgb'] = bytes(new_es_pabgb)
+            self._staged_equip_files['equipslotinfo.pabgh'] = bytes(new_es_pabgh)
             self._buff_modified = True
 
             log.info("UP v2: staged equipslotinfo (pabgb=%d pabgh=%d, "
@@ -10048,12 +10041,10 @@ class ItemBuffsTab(QWidget):
                         total_slot_added += len(to_add)
 
             new_es_pabgh, new_es_pabgb = esp.serialize_all(es_records)
-            # Deploy to 0059/ as a separate overlay -- see _eb_universal_proficiency_v2
-            # for empirical rationale.
-            self._buff_deploy_equipslotinfo_0059(gp_text, new_es_pabgb, new_es_pabgh)
-            if hasattr(self, '_staged_equip_files') and self._staged_equip_files:
-                for _k in ('equipslotinfo.pabgb', 'equipslotinfo.pabgh'):
-                    self._staged_equip_files.pop(_k, None)
+            if not hasattr(self, '_staged_equip_files'):
+                self._staged_equip_files = {}
+            self._staged_equip_files['equipslotinfo.pabgb'] = bytes(new_es_pabgb)
+            self._staged_equip_files['equipslotinfo.pabgh'] = bytes(new_es_pabgh)
 
             # (legacy 0059/ cleanup removed 2026-04-21 -- 0059/ is now the
             # canonical equipslotinfo overlay again; cleanup would delete it)
@@ -12017,20 +12008,6 @@ class ItemBuffsTab(QWidget):
             )
             return
 
-        # Check for iteminfo conflicts from other tools before applying
-        try:
-            from overlay_coordinator import check_iteminfo_conflicts_before_apply
-            buff_dir = f"{self._buff_overlay_spin.value():04d}"
-            warning = check_iteminfo_conflicts_before_apply(
-                self._buff_patcher.game_path, buff_dir, self._config)
-            if warning:
-                reply = QMessageBox.warning(
-                    self, "ItemInfo Conflict Detected", warning,
-                    QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel)
-                if reply != QMessageBox.Yes:
-                    return
-        except Exception:
-            pass
 
         if self._buff_modified:
             save_first = QMessageBox.question(
@@ -12133,8 +12110,12 @@ class ItemBuffsTab(QWidget):
                             bytes(final_data))
                         log.info("Direct serialize OK: %d bytes", len(final_data))
                     except Exception as _ser2:
-                        log.warning("Direct serialize also failed (%s), "
-                                    "using byte buffer", _ser2)
+                        log.error("Direct serialize also failed (%s)", _ser2)
+                        QMessageBox.critical(self, "Serialize Failed",
+                            f"Cannot serialize 1.0.5 iteminfo — durability/cooldown/stack changes will NOT apply.\n\n"
+                            f"Error: {_ser2}\n\n"
+                            f"This usually means the crimson_rs parser needs updating for the latest game version.\n"
+                            f"Stat buff changes (passives/enchants) that use byte patches may still work.")
                         final_data = bytearray(self._buff_data)
                         self._buff_rebuilt_pabgh = None
                 rpt.stage("rust_serialize", f"{len(final_data)} bytes")

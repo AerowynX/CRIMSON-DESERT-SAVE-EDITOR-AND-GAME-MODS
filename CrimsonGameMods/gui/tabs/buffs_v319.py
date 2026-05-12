@@ -134,6 +134,7 @@ class ItemBuffsTab(QWidget):
         self._buff_icons_enabled = True
         self._buff_modified = False
         self._buff_dirty_fields: dict = {}  # {item_key: set of field names touched}
+        self._bulk_intents: list = []  # direct intents from bulk ops, bypasses diff
         self._buff_item_limits = {}
         self._experimental_mode: bool = bool(self._config.get("experimental_mode", False))
         self._favorite_items: List[dict] = self._config.setdefault("favorite_items", [])
@@ -2883,6 +2884,7 @@ class ItemBuffsTab(QWidget):
             self._buff_data = bytearray(raw)
             self._buff_modified = False
             self._buff_dirty_fields = {}  # reset on re-extract
+            self._bulk_intents = []  # reset on re-extract
 
             if len(raw) < 1000:
                 QMessageBox.critical(self, "Extract Failed",
@@ -8886,6 +8888,10 @@ class ItemBuffsTab(QWidget):
 
         orig_by_key = {it['key']: it for it in orig}
         intents = []
+        # Bulk operation intents bypass the diff (baseline may already be modified)
+        bulk = getattr(self, '_bulk_intents', [])
+        if bulk:
+            intents.extend(bulk)
         dirty = self._buff_dirty_fields
         for item in self._buff_rust_items:
             ikey = item.get('key', 0)
@@ -10360,11 +10366,19 @@ class ItemBuffsTab(QWidget):
             return
         target = self._stack_spin.value()
         count = 0
+        new_bulk: list = []
         for it in self._buff_rust_items:
             cur = _safe_iv(it.get('max_stack_count', 0))
-            if cur > 1:
+            if cur > 1 and cur != target:
                 it['max_stack_count'] = target
+                new_bulk.append({'entry': it.get('string_key', ''),
+                                 'key': it.get('key', 0),
+                                 'field': 'max_stack_count', 'op': 'set', 'new': target})
                 count += 1
+        if new_bulk:
+            self._bulk_intents = [i for i in getattr(self, '_bulk_intents', [])
+                                  if i.get('field') != 'max_stack_count']
+            self._bulk_intents.extend(new_bulk)
         if hasattr(self, '_buff_rust_lookup'):
             self._buff_rust_lookup = {int(it['key']): it for it in self._buff_rust_items if 'key' in it}
         self._buff_modified = True
@@ -10372,7 +10386,7 @@ class ItemBuffsTab(QWidget):
             self._stack_check.setChecked(True)
         self._buff_refresh_stats()
         QMessageBox.information(self, "Max Stacks Applied",
-            f"Set max_stack_count = {target:,} on {count:,} stackable item(s).\n\nClick Export or Pull All Edits to deploy.")
+            f"Set max_stack_count = {target:,} on {count:,} stackable item(s).\n\nClick Export Field JSON v3 to write.")
 
     def _apply_inf_dura_all(self) -> None:
         if not getattr(self, '_buff_rust_items', None):
@@ -10384,6 +10398,13 @@ class ItemBuffsTab(QWidget):
             if cur > 0:
                 it['max_endurance'] = 65535
                 it['is_destroy_when_broken'] = 0
+                self._bulk_intents = [i for i in getattr(self, '_bulk_intents', [])
+                                      if not (i.get('field') in ('max_endurance','is_destroy_when_broken')
+                                              and i.get('key') == it.get('key'))]
+                self._bulk_intents += [{'entry': it.get('string_key',''), 'key': it.get('key',0),
+                                        'field': 'max_endurance', 'op': 'set', 'new': 65535},
+                                       {'entry': it.get('string_key',''), 'key': it.get('key',0),
+                                        'field': 'is_destroy_when_broken', 'op': 'set', 'new': 0}]
                 count += 1
         if hasattr(self, '_buff_rust_lookup'):
             self._buff_rust_lookup = {int(it['key']): it for it in self._buff_rust_items if 'key' in it}
@@ -10673,6 +10694,13 @@ class ItemBuffsTab(QWidget):
             it['max_charged_useable_count'] = target
             it['unk_post_max_charged_a'] = target
             it['unk_post_max_charged_b'] = target
+            self._bulk_intents = [i for i in getattr(self, '_bulk_intents', [])
+                                  if not (i.get('field') == 'max_charged_useable_count'
+                                          and i.get('key') == it.get('key'))]
+            self._bulk_intents.append({'entry': it.get('string_key', ''),
+                                       'key': it.get('key', 0),
+                                       'field': 'max_charged_useable_count',
+                                       'op': 'set', 'new': target})
             patched += 1
 
         if hasattr(self, '_buff_rust_lookup'):
@@ -10705,6 +10733,11 @@ class ItemBuffsTab(QWidget):
             it['cooltime'] = 1
             it['unk_post_cooltime_a'] = 1
             it['unk_post_cooltime_b'] = 1
+            self._bulk_intents = [i for i in getattr(self, '_bulk_intents', [])
+                                  if not (i.get('field') == 'cooltime'
+                                          and i.get('key') == it.get('key'))]
+            self._bulk_intents.append({'entry': it.get('string_key',''), 'key': it.get('key',0),
+                                       'field': 'cooltime', 'op': 'set', 'new': 1})
             patched += 1
 
         self._buff_modified = True

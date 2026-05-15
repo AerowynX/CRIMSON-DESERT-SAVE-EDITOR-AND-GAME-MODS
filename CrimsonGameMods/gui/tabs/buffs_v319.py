@@ -6979,20 +6979,81 @@ class ItemBuffsTab(QWidget):
     #
     # skeleton_name (Oongka gun fix) is set separately via _stage_kliff_gun_fix
     # so it always reflects the live game value.
-    _KLIFF_RUNTIME_CHARINFO_INTENTS = [
-        # Kliff
-        {'entry': 'Kliff',       'key': 1,       'field': 'appearance_name',       'op': 'set', 'new': 2453219380},  # Damian _appearanceName
-        {'entry': 'Kliff',       'key': 1,       'field': 'character_prefab_path',  'op': 'set', 'new': 3938836851},  # correct _characterPrefabPath (same for all 3 vanilla chars)
-        # Kliff_Clone
-        {'entry': 'Kliff_Clone', 'key': 1001367, 'field': 'appearance_name',       'op': 'set', 'new': 2453219380},
-        {'entry': 'Kliff_Clone', 'key': 1001367, 'field': 'character_prefab_path',  'op': 'set', 'new': 3938836851},
-        # Kliff_AI
-        {'entry': 'Kliff_AI',    'key': 1002113, 'field': 'appearance_name',       'op': 'set', 'new': 2453219380},
-        {'entry': 'Kliff_AI',    'key': 1002113, 'field': 'character_prefab_path',  'op': 'set', 'new': 3938836851},
-        # PlayerAll
-        {'entry': 'PlayerAll',   'key': 100,     'field': 'appearance_name',       'op': 'set', 'new': 2453219380},
-        {'entry': 'PlayerAll',   'key': 100,     'field': 'character_prefab_path',  'op': 'set', 'new': 3938836851},
-    ]
+    def _build_kliff_runtime_charinfo_intents(self) -> list:
+        """Build Kliff runtime-package characterinfo intents using live Damian values.
+
+        Reads appearance_name (_upperActionChartPackageGroupName) and
+        character_prefab_path (_lowerActionChartPackageGroupName) from the live game
+        files via characterinfo_full_parser, so the hashes stay correct across
+        game updates automatically.
+
+        Falls back to vanilla_tables on disk, then to known 1.07 values as a last resort.
+        """
+        app_hash = 0
+        prefab_hash = 0
+
+        def _read_from_bytes(ci_body, ci_gh):
+            try:
+                from characterinfo_full_parser import parse_all_entries
+                entries = parse_all_entries(ci_body, ci_gh)
+                by_name = {e.get('name'): e for e in entries if e}
+                damian = by_name.get('Damian') or by_name.get('Damiane')
+                if damian:
+                    return (damian.get('_upperActionChartPackageGroupName_key', 0),
+                            damian.get('_lowerActionChartPackageGroupName_key', 0))
+            except Exception:
+                pass
+            return 0, 0
+
+        # Priority 1: read from live game files (same path as _stage_kliff_gun_fix)
+        try:
+            import crimson_rs
+            gp = (self._buff_game_path.text().strip()
+                  if hasattr(self, '_buff_game_path') and self._buff_game_path else '')
+            if not gp:
+                gp = getattr(self, '_game_path', '') or self._config.get('game_install_path', '')
+            if gp:
+                dp = 'gamedata/binary__/client/bin'
+                ci_body = bytes(crimson_rs.extract_file(gp, '0008', dp, 'characterinfo.pabgb'))
+                ci_gh   = bytes(crimson_rs.extract_file(gp, '0008', dp, 'characterinfo.pabgh'))
+                app_hash, prefab_hash = _read_from_bytes(ci_body, ci_gh)
+        except Exception:
+            pass
+
+        # Priority 2: vanilla_tables on disk (updated each game version by the tool)
+        if not app_hash:
+            try:
+                import os
+                vt_dir = os.path.join(os.path.dirname(__file__), '..', '..', '..', '..',
+                                      'vanilla_tables')
+                vt_dir = os.path.normpath(vt_dir)
+                body_path = os.path.join(vt_dir, 'characterinfo.pabgb')
+                gh_path   = os.path.join(vt_dir, 'characterinfo.pabgh')
+                if os.path.exists(body_path) and os.path.exists(gh_path):
+                    with open(body_path, 'rb') as f: ci_body = f.read()
+                    with open(gh_path,   'rb') as f: ci_gh   = f.read()
+                    app_hash, prefab_hash = _read_from_bytes(ci_body, ci_gh)
+            except Exception:
+                pass
+
+        # Priority 3: known 1.07 fallback (update comment when PA changes them)
+        if not app_hash:
+            app_hash    = 1767116530  # Damian _upperActionChartPackageGroupName 1.07
+            prefab_hash = 3755051597  # Damian _lowerActionChartPackageGroupName 1.07
+
+        targets = [
+            ('Kliff',       1),
+            ('Kliff_Clone', 1001367),
+            ('Kliff_AI',    1002113),
+            ('PlayerAll',   100),
+        ]
+        intents = []
+        for entry, key in targets:
+            intents.append({'entry': entry, 'key': key,
+                            'field': 'appearance_name',       'op': 'set', 'new': app_hash})
+            intents.append({'entry': entry, 'key': key,
+                            'field': 'character_prefab_path', 'op': 'set', 'new': prefab_hash})
+        return intents
 
 
     # Weapon-type hints extracted from gimmick names.
@@ -9441,7 +9502,7 @@ class ItemBuffsTab(QWidget):
         # Deduplicate so we never emit two intents for the same (entry, key, field).
         if getattr(self, '_staged_kliff_runtime', False):
             existing_keys = {(i['entry'], i['key'], i['field']) for i in charinfo_intents}
-            for intent in self._KLIFF_RUNTIME_CHARINFO_INTENTS:
+            for intent in self._build_kliff_runtime_charinfo_intents():
                 k = (intent['entry'], intent['key'], intent['field'])
                 if k not in existing_keys:
                     charinfo_intents.append(intent)
@@ -13115,43 +13176,65 @@ class ItemBuffsTab(QWidget):
         return intents
 
     def _diff_staged_characterinfo(self) -> list:
-        """Diff staged characterinfo against vanilla for v3 multi-target export."""
+        """Diff staged characterinfo against vanilla for v3 multi-target export.
+
+        Uses dmm_parser.parse_table ('character_info') so field names in the
+        returned intents match the routing keys DMM expects (e.g. 'appearance_name',
+        'character_prefab_path', 'skeleton_name').
+
+        The old implementation used characterinfo_full_parser.parse_all_entries
+        which returns _camelCase_key field names and skipped them all with a
+        `k.startswith('_')` guard, so the diff always returned []. This meant
+        the export fell back entirely to _KLIFF_RUNTIME_CHARINFO_INTENTS (now
+        _build_kliff_runtime_charinfo_intents) with hardcoded stale values.
+        """
         staged = getattr(self, '_staged_charinfo_files', None)
         if not staged or 'characterinfo.pabgb' not in staged:
             return []
         try:
             import crimson_rs
-            from characterinfo_full_parser import parse_all_entries as ci_parse_all
+            from characterinfo_full_parser import parse_all_dmm as ci_parse_dmm
         except Exception as e:
             log.warning("v3 export: characterinfo parser unavailable (%s)", e)
             return []
         try:
-            gp = (self._buff_game_path.text().strip() if hasattr(self, '_buff_game_path') and self._buff_game_path else '') or self._config.get("game_install_path", "")
+            gp = (self._buff_game_path.text().strip()
+                  if hasattr(self, '_buff_game_path') and self._buff_game_path else '')
+            if not gp:
+                gp = self._config.get("game_install_path", "")
             dp = 'gamedata/binary__/client/bin'
             v_pabgb = bytes(crimson_rs.extract_file(gp, '0008', dp, 'characterinfo.pabgb'))
             v_pabgh = bytes(crimson_rs.extract_file(gp, '0008', dp, 'characterinfo.pabgh'))
             mod_pabgb = staged['characterinfo.pabgb']
             mod_pabgh = staged.get('characterinfo.pabgh', v_pabgh)
-            v_entries = ci_parse_all(v_pabgb, v_pabgh)
-            m_entries = ci_parse_all(mod_pabgb, mod_pabgh)
+            v_entries = ci_parse_dmm(v_pabgb, v_pabgh)
+            m_entries = ci_parse_dmm(mod_pabgb, mod_pabgh)
         except Exception as e:
             log.warning("v3 export: characterinfo parse failed (%s)", e)
             return []
-        v_by_name = {e.get('name'): e for e in v_entries}
+        if not v_entries or not m_entries:
+            log.warning("v3 export: characterinfo dmm parse returned empty")
+            return []
+
+        # Structural fields — not emitted as field-level intents
+        SKIP = {'key', 'string_key', 'is_blocked'}
+
+        v_by_skey = {e.get('string_key'): e for e in v_entries}
         intents = []
         for m in m_entries:
-            name = m.get('name')
-            v = v_by_name.get(name)
+            skey = m.get('string_key', '')
+            ikey = m.get('key', 0)
+            v = v_by_skey.get(skey)
             if v is None:
                 continue
-            for k, m_val in m.items():
-                if k == 'name':
+            for field, m_val in m.items():
+                if field in SKIP:
                     continue
-                if k.startswith('_'):
-                    continue  # internal parser metadata, not game data
-                if v.get(k) != m_val and isinstance(m_val, (int, float, str)):
-                    intents.append({'entry': name or '', 'key': int(m.get('key', 0)),
-                        'field': k, 'op': 'set', 'new': m_val})
+                if v.get(field) == m_val:
+                    continue
+                if isinstance(m_val, (int, float, str, list)):
+                    intents.append({'entry': skey, 'key': ikey,
+                                    'field': field, 'op': 'set', 'new': m_val})
         return intents
 
     def _goto_stacker_legacy_export(self) -> None:

@@ -798,13 +798,14 @@ class SkillTreeTab(QWidget):
 
         self._skill_table_updating = True
         for row, e in enumerate(entries):
-            # Name (read-only)
-            item = QTableWidgetItem(e['name'])
+            # Name — dmm_parser uses 'string_key', skillinfo_parser uses 'name'
+            display_name = e.get('name', e.get('string_key', str(e.get('key', row))))
+            item = QTableWidgetItem(display_name)
             item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             dn = e.get('dev_skill_name', b'')
             if isinstance(dn, bytes):
                 dn = dn.decode('utf-8', 'replace')
-            item.setToolTip(dn if dn else e['name'])
+            item.setToolTip(dn if dn else display_name)
             self._skill_table.setItem(row, 0, item)
 
             # Key (read-only)
@@ -826,8 +827,9 @@ class SkillTreeTab(QWidget):
             ml.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self._skill_table.setItem(row, 3, ml)
 
-            # BuffLevels (read-only)
-            bl = QTableWidgetItem(str(e.get('_buffLevelCount', 0)))
+            # BuffLevels (read-only) — dmm_parser has 'buff_level_list', skillinfo_parser has '_buffLevelCount'
+            bl_count = e.get('_buffLevelCount', len(e.get('buff_level_list', [])))
+            bl = QTableWidgetItem(str(bl_count))
             bl.setFlags(bl.flags() & ~Qt.ItemFlag.ItemIsEditable)
             bl.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self._skill_table.setItem(row, 4, bl)
@@ -1335,7 +1337,10 @@ class SkillTreeTab(QWidget):
                     d = r.get('d', 0)
                     if isinstance(d, int) and d > 2**63:
                         d = d - 2**64
-                    if d > 0:
+                    # Scale ALL non-zero costs — both positive (regen/idle drain) and
+                    # negative (actual stamina costs: roll, dash, fly, climb, swim,
+                    # combat skills). Previous code only handled d > 0, missing everything.
+                    if d != 0:
                         r['d'] = int(d * factor)
                         res_count += 1
                         hit = True
@@ -1350,8 +1355,8 @@ class SkillTreeTab(QWidget):
                         val = body.get(fk, 0)
                         if isinstance(val, int) and val > 2**63:
                             val = val - 2**64
-                        if isinstance(val, (int, float)) and val < 0:
-                            body[fk] = 0
+                        if isinstance(val, (int, float)) and val != 0:
+                            body[fk] = int(val * factor)
                             buff_count += 1
                             hit = True
 
@@ -1361,8 +1366,13 @@ class SkillTreeTab(QWidget):
         new_pabgb = bytes(dmm_parser.serialize_table('skill_info', dmm_items))
         self._skill_pabgb = new_pabgb
 
-        import skillinfo_parser as sip
-        self._skill_entries = sip.parse_all(self._skill_pabgh, new_pabgb)
+        # Keep dmm_parser items directly — do NOT re-parse with skillinfo_parser.
+        # Re-parsing produces a different schema (blob field names like 'type_id',
+        # 'field_12', etc.) that mismatches the dmm_parser vanilla entries, causing
+        # every modified skill's buff_level_list to export as spurious intents with
+        # internal field names DMM can't apply. Staying in dmm_parser throughout
+        # keeps vanilla and modified on the same schema → clean diff → correct export.
+        self._skill_entries = dmm_items
         self._skill_dirty_keys.update(dirty_keys)
         self._populate_skill_table()
 
@@ -1373,8 +1383,9 @@ class SkillTreeTab(QWidget):
         QMessageBox.information(self, f"Stamina Preset: {pct}",
             f"Modified {total} stamina values via dmm_parser:\n"
             f"  {res_count} resource costs scaled to {pct}\n"
-            f"  {buff_count} buff-level drains zeroed\n\n"
-            f"Recovery values preserved.")
+            f"    (includes roll, dash, fly, climb, swim, combat)\n"
+            f"  {buff_count} buff-level drains scaled to {pct}\n\n"
+            f"Export Field JSON v3 to save.")
 
     def _apply_skill_value_patches(self, path: str) -> None:
         """Apply a legacy skill JSON mod by patching values in-place.
@@ -1728,19 +1739,61 @@ def _apply_one_skill_patch(patched: bytearray, vanilla: bytes,
     return 0
 
 
+def _remap_resource_stat_list(items) -> list:
+    """Convert a use_resource_stat_list from skillinfo_parser field names to
+    dmm_parser field names so DMM can deserialize them correctly.
+
+    skillinfo_parser  →  dmm_parser (ResourceStat in info.rs)
+      stat_type       →  a           (u8)
+      stat_hash       →  lookup_b    (u32)
+      flag            →  c           (u8)
+      value           →  d           (u64)  ← the stamina cost
+      hash2           →  lookup_e    (u32)
+      hash3           →  lookup_f    (u32)
+
+    If the item already uses dmm_parser names (e.g. loaded via dmm_parser
+    directly), it passes through unchanged.
+    """
+    _SP_TO_DMP = {
+        'stat_type': 'a',
+        'stat_hash': 'lookup_b',
+        'flag':      'c',
+        'value':     'd',
+        'hash2':     'lookup_e',
+        'hash3':     'lookup_f',
+    }
+    result = []
+    for item in (items or []):
+        if not isinstance(item, dict):
+            result.append(item)
+            continue
+        # Already dmm_parser format if it has 'a' or 'lookup_b'
+        if 'a' in item or 'lookup_b' in item:
+            result.append(item)
+        else:
+            result.append({_SP_TO_DMP.get(k, k): v for k, v in item.items()})
+    return result
+
+
 def _diff_skill_entry(vanilla: dict, modified: dict) -> list[dict]:
     """Produce Format 3 field-level intents for one skill entry diff."""
     intents = []
-    name = modified['name']
+    # dmm_parser uses 'string_key'; skillinfo_parser uses 'name'
+    name = modified.get('name', modified.get('string_key', str(modified.get('key', '?'))))
     key = modified['key']
 
     # Fields to never export
-    SKIP = {'key', 'name_len', 'name_bytes', 'name', '_raw', '_pad_01',
+    SKIP = {'key', 'string_key', 'is_blocked',
+            'name_len', 'name_bytes', 'name', '_raw', '_pad_01',
             '_buffLevelCount', 'max_level', 'dev_skill_name', 'dev_skill_desc',
             'video_path_hash', 'buff_sustain_flag', 'skill_group_key_list',
             '_buff_data_raw', '_buff_raw_fallback', 'raw_bytes',
             '_cooltime', 'field_12',
-            '_useDriverResourceStatList'}
+            '_useDriverResourceStatList',
+            # buff_level_list: DMM exposes this as base64 blob internally —
+            # structured field intents (absent_flag/base/variant) can't be applied.
+            # Also prevents spurious round-trip diffs from the dmm_parser re-parse.
+            'buff_level_list', '_buffLevelList'}
 
     # camelCase → snake_case remap for old-parser fields that have canonical names
     FIELD_REMAP = {
@@ -1781,6 +1834,14 @@ def _diff_skill_entry(vanilla: dict, modified: dict) -> list[dict]:
         elif isinstance(new_val, (list, dict)):
             if export_field in ('buff_level_list', '_buffLevelList'):
                 _diff_buff_levels(intents, name, key, old_val, new_val)
+            elif export_field in ('use_resource_stat_list', 'use_driver_resource_stat_list'):
+                # Remap sub-field names from skillinfo_parser to dmm_parser format
+                # so DMM can deserialize ResourceStat objects correctly.
+                remapped = _remap_resource_stat_list(new_val)
+                intents.append({
+                    'entry': name, 'key': key, 'field': export_field, 'op': 'set',
+                    'new': remapped,
+                })
             else:
                 intents.append({
                     'entry': name, 'key': key, 'field': export_field, 'op': 'set',

@@ -4345,6 +4345,10 @@ class ItemBuffsTab(QWidget):
             return 0
         if not self._buff_rust_lookup:
             log.warning("Transmog: _buff_rust_lookup is empty — Extract first")
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.warning(None, "Transmog",
+                "Transmog swaps are queued but iteminfo is not extracted.\n"
+                "Click Extract first, then Apply to Game again.")
             return 0
         import copy as _cp
         applied = 0
@@ -8295,6 +8299,11 @@ class ItemBuffsTab(QWidget):
             return
 
         # Step 1: clear tribe_gender_list (instead of v2's expand)
+        # NOTE: we do NOT write tribe_gender_list=[] to the rust items because
+        # DMM applying an empty list causes the game to hang on load (infinite
+        # loading bug — the engine requires at least one valid entry).
+        # The equip slot expansion in step 2 already makes items cross-equippable.
+        # We only count how many would have been cleared for the status message.
         tg_cleared = 0
         for it in self._buff_rust_items:
             if not it.get('equip_type_info'):
@@ -8302,7 +8311,7 @@ class ItemBuffsTab(QWidget):
             for pd in (it.get('prefab_data_list') or []):
                 tg = pd.get('tribe_gender_list')
                 if tg:
-                    pd['tribe_gender_list'] = []
+                    # Do NOT set pd['tribe_gender_list'] = [] — causes infinite loading.
                     tg_cleared += 1
 
         if tg_cleared:
@@ -11022,7 +11031,8 @@ class ItemBuffsTab(QWidget):
             for pd in (it.get('prefab_data_list') or []):
                 tg = pd.get('tribe_gender_list')
                 if tg:
-                    pd['tribe_gender_list'] = []
+                    # Do NOT set pd['tribe_gender_list'] = [] — causes infinite loading.
+                    # Equip slot expansion below covers cross-character equipping.
                     tg_cleared += 1
 
         # equipslotinfo expansion + stage. Wrapped in try/except so a parser

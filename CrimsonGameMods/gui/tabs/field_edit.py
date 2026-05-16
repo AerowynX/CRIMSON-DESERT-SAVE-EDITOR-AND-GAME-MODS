@@ -424,20 +424,6 @@ class FieldEditTab(QWidget):
         layout.addWidget(wlabel)
 
         wpreset_row = QHBoxLayout()
-        self._weapon_kliff_gun_btn = QPushButton(tr("Apply Kliff Gun Fix"))
-        self._weapon_kliff_gun_btn.setToolTip(tr(
-            "ONE-CLICK PRESET — make Kliff hold and fire muskets/pistols.\n\n"
-            "Patches two fields:\n"
-            "  • Kliff._upperActionChartPackageGroupName ← Damian's value\n"
-            "      (gives Kliff Damian's combat package — has gun fire animations)\n"
-            "  • Kliff._characterGamePlayDataName ← Oongka's value\n"
-            "      (gives Kliff Oongka's input map — fixes sheath/stow position so\n"
-            "       muskets attach to back instead of dropping at his feet)\n\n"
-            "After clicking, hit 'Apply to Game' (top button row) to deploy."
-        ))
-        self._weapon_kliff_gun_btn.clicked.connect(self._weapon_apply_kliff_gun_preset)
-        wpreset_row.addWidget(self._weapon_kliff_gun_btn)
-
         self._weapon_reset_btn = QPushButton(tr("Reset to Vanilla"))
         self._weapon_reset_btn.setToolTip(tr(
             "Restores all 6 runtime-package fields on Kliff/Damian/Oongka to their\n"

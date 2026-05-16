@@ -18,7 +18,7 @@ from PySide6.QtCore import Qt, QSize, QTimer, Signal
 from PySide6.QtGui import QAction, QBrush, QColor, QFont, QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog,
-    QDialogButtonBox, QFileDialog, QFrame, QGridLayout, QGroupBox,
+    QDialogButtonBox, QDoubleSpinBox, QFileDialog, QFrame, QGridLayout, QGroupBox,
     QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton,
     QScrollArea, QSizePolicy, QSpinBox, QSplitter, QTableWidget,
@@ -2577,6 +2577,29 @@ class ItemBuffsTab(QWidget):
         sgl.addWidget(socket_bulk_btn)
 
         pl.addWidget(sockets_grp)
+
+        # ── Dragon Speed Boost ───────────────────────────────────────────────
+        dragon_grp = QGroupBox("Dragon Speed Boost (Blackstar)")
+        dgl = QVBoxLayout(dragon_grp)
+        dragon_row = QHBoxLayout()
+        dragon_row.addWidget(QLabel("Speed multiplier:"))
+        self._dragon_speed_spin = QDoubleSpinBox()
+        self._dragon_speed_spin.setRange(0.5, 5.0)
+        self._dragon_speed_spin.setSingleStep(0.25)
+        self._dragon_speed_spin.setValue(1.5)
+        self._dragon_speed_spin.setDecimals(2)
+        self._dragon_speed_spin.setFixedWidth(80)
+        self._dragon_speed_spin.setToolTip("1.0 = vanilla  |  1.5 = 50% faster  |  2.0 = double")
+        dragon_row.addWidget(self._dragon_speed_spin)
+        dragon_row.addWidget(QLabel("× vanilla"))
+        dragon_row.addStretch(1)
+        dgl.addLayout(dragon_row)
+        dragon_export_btn = QPushButton("Export Dragon Speed Mod JSON")
+        dragon_export_btn.setStyleSheet(
+            "background-color: #6A1B9A; color: white; font-weight: bold; padding: 10px;")
+        dragon_export_btn.clicked.connect(self._dragon_speed_export)
+        dgl.addWidget(dragon_export_btn)
+        pl.addWidget(dragon_grp)
 
         pl.addStretch(1)
 
@@ -13279,6 +13302,97 @@ class ItemBuffsTab(QWidget):
             "1. Click 'Pull ItemBuffs Edit' to pull your edits.\n"
             "2. Click 'PREVIEW' to build the merge.\n"
             "3. Click 'EXPORT LEGACY JSON' to save.")
+
+    def _dragon_speed_export(self) -> None:
+        """Export a Format 0 binary-patch JSON for dragon speed boost.
+
+        Scales all 27 speed threshold f32 values in m0004_ride_dragon_lower.paac
+        by the user-chosen multiplier, then saves a DMM-compatible patch JSON.
+        No game file extraction required — offsets and vanilla values are hardcoded
+        from the known 1.07 PAAC layout.
+        """
+        import struct, json as _json
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+        mult = getattr(self, '_dragon_speed_spin', None)
+        multiplier = mult.value() if mult else 1.5
+
+        if abs(multiplier - 1.0) < 0.001:
+            QMessageBox.information(self, "Dragon Speed Boost",
+                "Multiplier is 1.0 — that's vanilla speed. Choose a different value.")
+            return
+
+        # All 27 speed threshold offsets with their vanilla f32 values.
+        # Sourced from lemonheads mod v1.0.0 against 1.07 PAAC.
+        SPEED_OFFSETS = [
+            (435,   5.0,  "Ch1 Generic press input"),
+            (842,   5.0,  "Ch2 Landing — sustained"),
+            (1245,  25.0, "Ch3 Drift RIGHT — exit (+52)"),
+            (1249,  25.0, "Ch3 Drift RIGHT — exit (+56)"),
+            (1708,  25.0, "Ch4 Landing — start (+52)"),
+            (1712,  25.0, "Ch4 Landing — start (+56)"),
+            (2195,  20.0, "Ch5 Dodge roll RIGHT (+52)"),
+            (2199,  20.0, "Ch5 Dodge roll RIGHT (+56)"),
+            (2658,  20.0, "Ch6 Forward-collision (+52)"),
+            (2662,  20.0, "Ch6 Forward-collision (+56)"),
+            (3145,  20.0, "Ch7 Dive DOWN sustained (+52)"),
+            (3149,  20.0, "Ch7 Dive DOWN sustained (+56)"),
+            (3608,  20.0, "Ch8 Landing guidance (+52)"),
+            (3612,  20.0, "Ch8 Landing guidance (+56)"),
+            (4095,  15.0, "Ch9 Dive DOWN sustained (+52)"),
+            (4099,  10.0, "Ch9 Dive DOWN sustained (+56)"),
+            (4702,  15.0, "Ch10 Brake guidance (+52)"),
+            (4706,  10.0, "Ch10 Brake guidance (+56)"),
+            (5189,  25.0, "Ch11 Blocking condition (+52)"),
+            (5193,  25.0, "Ch11 Blocking condition (+56)"),
+            (5588,  25.0, "Ch12 Drift RIGHT — sustained (+52)"),
+            (5592,  5.0,  "Ch12 Drift RIGHT — sustained (+56)"),
+            (6287,  50.0, "Ch13 Jump button press (+52)"),
+            (18073, 50.0, "Ch27 Keyframed animation (+52)"),
+            (18077, 25.0, "Ch27 Keyframed animation (+56)"),
+            (18472, 50.0, "Ch28 Ground jump — start (+52)"),
+            (18476, 50.0, "Ch28 Ground jump — start (+56)"),
+        ]
+
+        changes = []
+        mult_str = f"{multiplier:.2f}".rstrip('0').rstrip('.')
+        for offset, vanilla, label in SPEED_OFFSETS:
+            patched = vanilla * multiplier
+            original_hex = struct.pack('<f', vanilla).hex()
+            patched_hex  = struct.pack('<f', patched).hex()
+            changes.append({
+                'offset':   offset,
+                'label':    f"[{mult_str}x] {label} ({vanilla} → {patched:.4g})",
+                'original': original_hex,
+                'patched':  patched_hex,
+            })
+
+        doc = {
+            'name':        f"Dragon Speed Boost {mult_str}x",
+            'version':     '1.0',
+            'description': (f"{mult_str}x speed boost for the Blackstar dragon mount. "
+                            f"Generated by CrimsonGameMods."),
+            'author':      'CrimsonGameMods',
+            'patches': [{
+                'game_file':    'actionchart/m0004_ride_dragon_lower.paac',
+                'source_group': '0010',
+                'changes':      changes,
+            }],
+        }
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Dragon Speed Mod",
+            f"DragonSpeed_{mult_str}x.json",
+            "JSON (*.json);;All Files (*)")
+        if not path:
+            return
+
+        with open(path, 'w', encoding='utf-8') as f:
+            _json.dump(doc, f, indent=2, ensure_ascii=False)
+
+        QMessageBox.information(self, "Dragon Speed Boost",
+            f"Exported {len(changes)} patches for {mult_str}x speed.\n\n"
+            f"Drop the JSON into your DMM mods folder.")
 
     def _buff_export_mod_folder(self) -> None:
         """Export as a standard folder mod (Stacker style).

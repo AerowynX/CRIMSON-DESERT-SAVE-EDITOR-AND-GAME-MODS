@@ -229,62 +229,6 @@ class SkillTreeTab(QWidget):
         sg_layout.addLayout(skill_btn_row)
 
         # --- stamina preset row ---
-        preset_row = QHBoxLayout()
-        preset_row.setSpacing(4)
-        preset_lbl = QLabel("Stamina/Spirit:")
-        preset_lbl.setStyleSheet(f"color: {COLORS['accent']}; font-weight: bold;")
-        preset_row.addWidget(preset_lbl)
-
-        stamina_presets = [
-            ("10%", 0.10, "10% stamina drain — barely noticeable reduction."),
-            ("25%", 0.25, "25% stamina drain — mild reduction."),
-            ("50%", 0.50, "50% stamina drain — half drain rate."),
-            ("75%", 0.75, "75% stamina drain — significant reduction."),
-            ("Infinite", 0.0, "Infinite stamina — zero drain."),
-        ]
-        for label, factor, tip in stamina_presets:
-            btn = QPushButton(label)
-            btn.setToolTip(f"Apply Stamina Preset: {tip}")
-            btn.setStyleSheet(
-                "QPushButton { background-color: #00695C; color: white; "
-                "font-weight: bold; padding: 4px 10px; }")
-            btn.clicked.connect(
-                lambda _c=False, f=factor: self._on_stamina_preset(f))
-            preset_row.addWidget(btn)
-
-        preset_row.addStretch()
-        sg_layout.addLayout(preset_row)
-
-        # --- regen multiplier row ---
-        regen_row = QHBoxLayout()
-        regen_row.setSpacing(4)
-        regen_lbl = QLabel("Regen Boost:")
-        regen_lbl.setStyleSheet(f"color: {COLORS['accent']}; font-weight: bold;")
-        regen_row.addWidget(regen_lbl)
-
-        self._regen_spin = QSpinBox()
-        self._regen_spin.setRange(2, 10)
-        self._regen_spin.setValue(2)
-        self._regen_spin.setSuffix("×")
-        self._regen_spin.setFixedWidth(60)
-        self._regen_spin.setToolTip("Multiplier for stamina/spirit regeneration rate (2×–10×)")
-        regen_row.addWidget(self._regen_spin)
-
-        regen_btn = QPushButton("Apply Regen Boost")
-        regen_btn.setToolTip(
-            "Multiply only stamina/spirit REGENERATION values by the selected factor.\n"
-            "Costs (roll, dash, fly, combat skills) are unchanged.\n"
-            "Load SkillInfo first.")
-        regen_btn.setStyleSheet(
-            "QPushButton { background-color: #00695C; color: white; "
-            "font-weight: bold; padding: 4px 10px; }")
-        regen_btn.clicked.connect(self._on_regen_boost)
-        regen_row.addWidget(regen_btn)
-
-        regen_row.addStretch()
-        sg_layout.addLayout(regen_row)
-
-
         bulk_row = QHBoxLayout()
         bulk_row.setSpacing(4)
         bulk_lbl = QLabel("Bulk Mods:")
@@ -1740,6 +1684,16 @@ class SkillTreeTab(QWidget):
 
         n_structured = len(intents)
         n_buff_raw   = len(buff_raw)
+
+        # Split by dispatcher:
+        # - dmmski reads root 'target'/'intents' → handles _buff_data_raw byte-replace
+        # - dmmv3_skill reads 'targets' array → handles use_resource_stat_list structured
+        # Mixing them causes each dispatcher to encounter unknown intent types and skip.
+        structured_intents = [i for i in all_intents
+                              if i.get('field') != '_buff_data_raw']
+        raw_intents_only   = [i for i in all_intents
+                              if i.get('field') == '_buff_data_raw']
+
         doc = {
             'modinfo': {
                 'title': 'Skill Mod',
@@ -1752,18 +1706,15 @@ class SkillTreeTab(QWidget):
                 'note': 'Format 3 -- structured + _buff_data_raw byte-replace intents',
             },
             'format': 3,
-            # Include BOTH the legacy root-level target/intents (for the dmmski
-            # byte-replace dispatcher which reads _buff_data_raw intents for
-            # buff_level_list changes — climbing, running, flying stamina) AND
-            # the standard targets array (for the typed dmmv3_skill dispatcher
-            # which handles use_resource_stat_list structured intents).
-            # Both dispatchers run independently on the same file.
+            'format_minor': 1,
+            # Root target/intents → dmmski dispatcher (_buff_data_raw only)
             'target': 'skill.pabgb',
-            'intents': all_intents,
+            'intents': raw_intents_only,
+            # Targets array → dmmv3_skill dispatcher (structured intents only)
             'targets': [
                 {
                     'file': 'skill.pabgb',
-                    'intents': all_intents,
+                    'intents': structured_intents,
                 }
             ],
         }

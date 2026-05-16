@@ -6264,7 +6264,7 @@ class ItemBuffsTab(QWidget):
                 {"stat": 1000026, "change_mb": 10},
             ]
 
-            ed['equip_buffs'] = [
+            GOD_MODE_BUFFS = [
                 {"buff": 1000072, "level": 10},
                 {"buff": 1000071, "level": 10},
                 {"buff": 1000073, "level": 10},
@@ -6274,6 +6274,12 @@ class ItemBuffsTab(QWidget):
                 {"buff": 1000123, "level": 10},
                 {"buff": 1000114, "level": 10},
             ]
+            existing = ed.get('equip_buffs', []) or []
+            existing_ids = {b['buff'] for b in existing}
+            for b in GOD_MODE_BUFFS:
+                if b['buff'] not in existing_ids:
+                    existing.append(b)
+            ed['equip_buffs'] = existing
 
         self._buff_modified = True
         self._buff_refresh_stats()

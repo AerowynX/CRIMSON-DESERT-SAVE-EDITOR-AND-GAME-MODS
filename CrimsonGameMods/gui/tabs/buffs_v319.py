@@ -1907,6 +1907,15 @@ class ItemBuffsTab(QWidget):
             "Gimmick: 1002041, 1 charge, 30-min cooldown.")
         great_thief_btn.clicked.connect(self._eb_great_thief_pick_variant)
         grid_buttons.append(great_thief_btn)
+
+        no_fall_btn = QPushButton("No Fall Damage")
+        no_fall_btn.setToolTip(
+            "Adds fall damage reduction buff to the selected item.\n"
+            "Sets equip_buffs: BuffLevel_Food_FallDamageReduce (1000185) level 10\n"
+            "on all enchant levels, and stages buffinfo changes so the reduction\n"
+            "values export correctly via Export Field JSON v3.")
+        no_fall_btn.clicked.connect(self._eb_apply_no_fall_damage)
+        grid_buttons.append(no_fall_btn)
         
         dev_immunity_btn = QPushButton("Immunity")
         dev_immunity_btn.setToolTip("Adds DEV Immune Ring buff to item.")
@@ -2584,7 +2593,7 @@ class ItemBuffsTab(QWidget):
         dragon_row.addWidget(QLabel("× vanilla"))
         dragon_row.addStretch(1)
         dgl.addLayout(dragon_row)
-        dragon_export_btn = QPushButton("Export Dragon Speed Mod JSON")
+        dragon_export_btn = QPushButton("Export Dragon Speed Mod")
         dragon_export_btn.setStyleSheet(
             "background-color: #6A1B9A; color: white; font-weight: bold; padding: 10px;")
         dragon_export_btn.clicked.connect(self._dragon_speed_export)
@@ -6669,6 +6678,84 @@ class ItemBuffsTab(QWidget):
     }
 
 
+    def _eb_apply_no_fall_damage(self) -> None:
+        """Apply No Fall Damage buff to the selected item.
+
+        Adds equip_buffs: [{buff: 1000185, level: 10}] to every enchant level
+        on the selected item (BuffLevel_Food_FallDamageReduce at max level),
+        and stages buffinfo changes so Export Field JSON v3 includes both
+        the iteminfo equip_buffs change and the buffinfo reduction values.
+        """
+        if not hasattr(self, '_buff_rust_items') or self._buff_rust_items is None:
+            QMessageBox.warning(self, "No Fall Damage", "Extract with Rust parser first.")
+            return
+        if not hasattr(self, '_buff_current_item') or self._buff_current_item is None:
+            QMessageBox.warning(self, "No Fall Damage", "Select an item first.")
+            return
+
+        rust_info = self._buff_rust_lookup.get(self._buff_current_item.item_key)
+        if rust_info is None:
+            return
+
+        display_name = self._name_db.get_name(self._buff_current_item.item_key)
+
+        reply = QMessageBox.question(
+            self, "No Fall Damage",
+            f"Apply No Fall Damage buff to {display_name}?\n\n"
+            f"Adds equip_buff: BuffLevel_Food_FallDamageReduce (1000185) level 10\n"
+            f"to all enchant levels on the item.\n\n"
+            f"Also stages buffinfo.pabgb changes (exported via Export Field JSON v3).",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        # Add equip_buff to every enchant level
+        BUFF_ID = 1000185
+        BUFF_LEVEL = 10
+        edl = rust_info.get('enchant_data_list', [])
+        if not edl:
+            # Create a minimal enchant_data_list if none exists
+            edl = [{'enchant_stat_data': {'stat_list_static': [], 'stat_list_static_level': [],
+                                           'max_stat_list': [], 'regen_stat_list': []},
+                    'equip_buffs': []}]
+            rust_info['enchant_data_list'] = edl
+
+        modified_levels = 0
+        for ed in edl:
+            existing_buffs = ed.get('equip_buffs', []) or []
+            if not any(b.get('buff') == BUFF_ID for b in existing_buffs):
+                existing_buffs.append({'buff': BUFF_ID, 'level': BUFF_LEVEL})
+                ed['equip_buffs'] = existing_buffs
+                modified_levels += 1
+
+        # Stage buffinfo changes — set all 10 levels of BuffLevel_FallDamageReduce
+        # (key 1000190) to escalating reduction values, max at level 10 = ~100%
+        game_path = self._config.get('game_install_path', '')
+        items, vanilla = self._buff_load_buffinfo(game_path)
+        buffinfo_staged = False
+        if items:
+            FALL_KEY = 1000190
+            LEVEL_VALUES = [100000, 200000, 300000, 400000, 500000,
+                            600000, 700000, 800000, 900000, 100000000000]
+            target = next((e for e in items if e.get('key') == FALL_KEY), None)
+            if target:
+                buff_data_list = target.get('buff_data_list', [])
+                for i, new_val in enumerate(LEVEL_VALUES):
+                    if i < len(buff_data_list):
+                        data = buff_data_list[i].get('data', {})
+                        variant = data.get('variant', {})
+                        body = variant.get('body', {})
+                        body['f01'] = new_val
+                buffinfo_staged = True
+
+        self._buff_modified = True
+        self._buff_refresh_stats()
+        status = f"No Fall Damage applied to {display_name} ({modified_levels} enchant level(s))"
+        if buffinfo_staged:
+            status += " + buffinfo staged"
+        self._buff_status_label.setText(status)
+
     def _eb_great_thief_pick_variant(self) -> None:
         from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton, QHBoxLayout
 
@@ -9560,6 +9647,7 @@ class ItemBuffsTab(QWidget):
 
         equip_intents = self._diff_staged_equipslotinfo()
         charinfo_intents = self._diff_staged_characterinfo()
+        buffinfo_intents = self._diff_staged_buffinfo()
 
         # If UP v3 / Enable Everything was run, include the Kliff runtime-package
         # intents (appearance_name, character_prefab_path, lookup_24, lookup_25,
@@ -9573,7 +9661,7 @@ class ItemBuffsTab(QWidget):
                     charinfo_intents.append(intent)
                     existing_keys.add(k)
 
-        total = len(intents) + len(equip_intents) + len(charinfo_intents)
+        total = len(intents) + len(equip_intents) + len(charinfo_intents) + len(buffinfo_intents)
 
         if total == 0:
             QMessageBox.information(self, "Export Field JSON v3",
@@ -9607,6 +9695,8 @@ class ItemBuffsTab(QWidget):
             targets.append({'file': 'equipslotinfo.pabgb', 'intents': equip_intents})
         if charinfo_intents:
             targets.append({'file': 'characterinfo.pabgb', 'intents': charinfo_intents})
+        if buffinfo_intents:
+            targets.append({'file': 'buffinfo.pabgb', 'intents': buffinfo_intents})
 
         doc = {'modinfo': modinfo, 'format': 3, 'format_minor': 1, 'targets': targets}
 
@@ -13312,6 +13402,103 @@ class ItemBuffsTab(QWidget):
                                     'field': field, 'op': 'set', 'new': m_val})
         return intents
 
+    def _buff_load_buffinfo(self, game_path: str = '') -> tuple[list, list] | tuple[None, None]:
+        """Load buffinfo dmm items and vanilla snapshot.
+
+        Returns (items, vanilla) where both are lists of dicts from
+        dmm_parser.parse_buffinfo_from_bytes. Returns (None, None) on failure.
+        Caches in self._buffinfo_dmm_items / self._buffinfo_dmm_vanilla.
+        """
+        if getattr(self, '_buffinfo_dmm_items', None) is not None:
+            return self._buffinfo_dmm_items, self._buffinfo_dmm_vanilla
+        try:
+            import crimson_rs, dmm_parser as _dmp, copy as _copy
+            gp = game_path or self._config.get('game_install_path', '')
+            if not gp:
+                return None, None
+            dp = 'gamedata/binary__/client/bin'
+            pabgb = bytes(crimson_rs.extract_file(gp, '0008', dp, 'buffinfo.pabgb'))
+            pabgh = bytes(crimson_rs.extract_file(gp, '0008', dp, 'buffinfo.pabgh'))
+            items = list(_dmp.parse_buffinfo_from_bytes(pabgb, pabgh))
+            vanilla = _copy.deepcopy(items)
+            self._buffinfo_dmm_items = items
+            self._buffinfo_dmm_vanilla = vanilla
+            self._buffinfo_pabgb = pabgb
+            self._buffinfo_pabgh = pabgh
+            log.info("Loaded %d buffinfo entries", len(items))
+            return items, vanilla
+        except Exception as e:
+            log.warning("Could not load buffinfo: %s", e)
+            return None, None
+
+    def _diff_staged_buffinfo(self) -> list:
+        """Diff modified buffinfo items against vanilla for v3 export.
+
+        Emits granular dot-path intents for nested fields so DMM only
+        sets the specific sub-fields that changed (e.g.
+        buff_data_list[9].data.variant.body.f01) rather than replacing
+        the whole buff_data_list array.
+        """
+        items = getattr(self, '_buffinfo_dmm_items', None)
+        vanilla = getattr(self, '_buffinfo_dmm_vanilla', None)
+        if not items or not vanilla:
+            return []
+
+        SKIP = {'key', 'string_key', 'is_blocked'}
+        v_by_key = {e.get('key'): e for e in vanilla}
+        intents = []
+
+        for m in items:
+            ikey = m.get('key', 0)
+            skey = m.get('string_key', f'entry_{ikey}')
+            v = v_by_key.get(ikey)
+            if v is None:
+                continue
+
+            for field, m_val in m.items():
+                if field in SKIP:
+                    continue
+                v_val = v.get(field)
+                if m_val == v_val:
+                    continue
+
+                # buff_data_list: diff each entry individually
+                if (field == 'buff_data_list'
+                        and isinstance(m_val, list) and isinstance(v_val, list)
+                        and len(m_val) == len(v_val)):
+                    for idx, (m_entry, v_entry) in enumerate(zip(m_val, v_val)):
+                        if m_entry == v_entry:
+                            continue
+                        # Diff nested: data.variant.body.f01 etc.
+                        self._diff_nested(
+                            intents, skey, ikey,
+                            f'{field}[{idx}]', v_entry, m_entry)
+                elif isinstance(m_val, dict) and isinstance(v_val, dict):
+                    for sub, sub_val in m_val.items():
+                        if v_val.get(sub) != sub_val:
+                            intents.append({'entry': skey, 'key': ikey,
+                                            'field': f'{field}.{sub}',
+                                            'op': 'set', 'new': sub_val})
+                else:
+                    intents.append({'entry': skey, 'key': ikey,
+                                    'field': field, 'op': 'set', 'new': m_val})
+        return intents
+
+    @staticmethod
+    def _diff_nested(intents: list, skey: str, ikey: int,
+                     path: str, v: object, m: object) -> None:
+        """Recursively diff two values and append dot-path intents."""
+        if v == m:
+            return
+        if isinstance(m, dict) and isinstance(v, dict):
+            for k in m:
+                if v.get(k) != m[k]:
+                    ItemBuffsTab._diff_nested(
+                        intents, skey, ikey, f'{path}.{k}', v.get(k), m[k])
+        else:
+            intents.append({'entry': skey, 'key': ikey,
+                            'field': path, 'op': 'set', 'new': m})
+
     def _goto_stacker_legacy_export(self) -> None:
         """Switch to Stacker Tool tab for legacy JSON export."""
         self.navigate_requested.emit("stacker")
@@ -13410,6 +13597,102 @@ class ItemBuffsTab(QWidget):
 
         QMessageBox.information(self, "Dragon Speed Boost",
             f"Exported {len(changes)} patches for {mult_str}x speed.\n\n"
+            f"Drop the JSON into your DMM mods folder.")
+
+    def _no_fall_damage_export(self) -> None:
+        """Export a No Fall Damage mod JSON targeting buffinfo.pabgb.
+
+        Sets BuffLevel_FallDamageReduce (key 1000190) level 9 variant.body.f01
+        to 100000000000 (effectively 100% fall damage reduction) via Format 3.1
+        buffinfo.pabgb intents — DMM's buff_info dispatcher handles this natively.
+        """
+        import json as _json
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+        game_path = self._config.get('game_install_path', '')
+        items, vanilla = self._buff_load_buffinfo(game_path)
+
+        if items is None:
+            QMessageBox.warning(self, "No Fall Damage",
+                "Could not load buffinfo.pabgb from game.\n"
+                "Make sure the game path is set correctly.")
+            return
+
+        # Find BuffLevel_FallDamageReduce (key 1000190)
+        FALL_REDUCE_KEY = 1000190
+        target = next((e for e in items if e.get('key') == FALL_REDUCE_KEY), None)
+        if target is None:
+            QMessageBox.warning(self, "No Fall Damage",
+                f"BuffLevel_FallDamageReduce (key {FALL_REDUCE_KEY}) not found in buffinfo.")
+            return
+
+        van_target = next((e for e in vanilla if e.get('key') == FALL_REDUCE_KEY), None)
+
+        # buff_data_list[9] is the max level (level 10) entry.
+        # variant.body.f01 = the reduction value. 100000000000 = effectively 100%.
+        buff_data_list = target.get('buff_data_list', [])
+        if len(buff_data_list) < 10:
+            QMessageBox.warning(self, "No Fall Damage",
+                f"Expected 10 buff_data_list entries, found {len(buff_data_list)}.")
+            return
+
+        # Mutate the live item so it diffs correctly
+        entry9 = buff_data_list[9]
+        data = entry9.get('data', {})
+        variant = data.get('variant', {})
+        body = variant.get('body', {})
+        current_f01 = body.get('f01', 0)
+
+        if current_f01 == 100000000000:
+            QMessageBox.information(self, "No Fall Damage",
+                "BuffLevel_FallDamageReduce level 10 is already at max reduction.")
+            return
+
+        # Build the intents directly from the mod we analysed
+        # This is a clean minimal set — only the values that actually differ
+        SKEY = target.get('string_key', 'BuffLevel_FallDamageReduce')
+
+        # The mod sets all 10 levels of BuffLevel_FallDamageReduce to scaled values
+        # (100000→1000000000 progression). Level 10 (index 9) at 100000000000 = ~100%.
+        # We replicate the exact pattern from the reference mod for all 10 levels.
+        LEVEL_VALUES = [100000, 200000, 300000, 400000, 500000,
+                        600000, 700000, 800000, 900000, 100000000000]
+
+        intents = []
+        for i, new_f01 in enumerate(LEVEL_VALUES):
+            intents.append({
+                'entry': SKEY,
+                'key': FALL_REDUCE_KEY,
+                'field': f'buff_data_list[{i}].data.variant.body.f01',
+                'op': 'set',
+                'new': new_f01,
+            })
+
+        doc = {
+            'modinfo': {
+                'title': 'No Fall Damage',
+                'version': '1.0',
+                'description': 'Sets fall damage reduction to 100% at max buff level.',
+                'author': 'CrimsonGameMods',
+                'note': 'Format 3.1 — buffinfo.pabgb field intents',
+            },
+            'format': 3,
+            'format_minor': 1,
+            'targets': [{'file': 'buffinfo.pabgb', 'intents': intents}],
+        }
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export No Fall Damage Mod",
+            "No_Fall_Damage.field.json",
+            "Field JSON (*.field.json *.json);;All Files (*)")
+        if not path:
+            return
+
+        with open(path, 'w', encoding='utf-8') as f:
+            _json.dump(doc, f, indent=2, ensure_ascii=False)
+
+        QMessageBox.information(self, "No Fall Damage",
+            f"Exported {len(intents)} buffinfo intents.\n\n"
             f"Drop the JSON into your DMM mods folder.")
 
     def _buff_export_mod_folder(self) -> None:

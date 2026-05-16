@@ -7156,28 +7156,42 @@ class ItemBuffsTab(QWidget):
     def _build_kliff_runtime_charinfo_intents(self) -> list:
         """Build Kliff runtime-package characterinfo intents using live Damian values.
 
-        Reads appearance_name (_upperActionChartPackageGroupName) and
-        character_prefab_path (_lowerActionChartPackageGroupName) from the live game
-        files via characterinfo_full_parser, so the hashes stay correct across
-        game updates automatically.
+        Reads all 5 Damian appearance fields from live game via dmm_parser.parse_table.
+        All 5 must be present together — lookup_24/25 carry the model/skeleton-variation
+        paths; without them the game has no path to load and the gun mesh is invisible.
 
-        Falls back to vanilla_tables on disk, then to known 1.07 values as a last resort.
+        Verified values (document_kliff_hashes.rs, game 1.07):
+          appearance_name       = 1767116530  "Player_PHW"
+          character_prefab_path = 3755051597  "Player_PHW_Lower"
+          lookup_24             = 2831867940  phw_01.pab model path hash
+          lookup_25             = 3511542393  phw nude skeleton variation path hash
+          flag_c                = 2           gender enum: 2 = Damiane/PHW
+
+        Falls back to vanilla_tables on disk, then to verified 1.07 values.
         """
-        app_hash = 0
+        app_hash    = 0
         prefab_hash = 0
+        lookup_24   = 0
+        lookup_25   = 0
+        flag_c      = 0
 
         def _read_from_bytes(ci_body, ci_gh):
             try:
-                from characterinfo_full_parser import parse_all_entries
-                entries = parse_all_entries(ci_body, ci_gh)
-                by_name = {e.get('name'): e for e in entries if e}
+                import dmm_parser
+                items = dmm_parser.parse_table('character_info', ci_body, ci_gh)
+                by_name = {it.get('string_key'): it for it in items}
                 damian = by_name.get('Damian') or by_name.get('Damiane')
                 if damian:
-                    return (damian.get('_upperActionChartPackageGroupName_key', 0),
-                            damian.get('_lowerActionChartPackageGroupName_key', 0))
+                    return (
+                        int(damian.get('appearance_name', 0) or 0),
+                        int(damian.get('character_prefab_path', 0) or 0),
+                        int(damian.get('lookup_24', 0) or 0),
+                        int(damian.get('lookup_25', 0) or 0),
+                        int(damian.get('flag_c', 0) or 0),
+                    )
             except Exception:
                 pass
-            return 0, 0
+            return 0, 0, 0, 0, 0
 
         # Priority 1: read from live game files (same path as _stage_kliff_gun_fix)
         try:
@@ -7190,30 +7204,33 @@ class ItemBuffsTab(QWidget):
                 dp = 'gamedata/binary__/client/bin'
                 ci_body = bytes(crimson_rs.extract_file(gp, '0008', dp, 'characterinfo.pabgb'))
                 ci_gh   = bytes(crimson_rs.extract_file(gp, '0008', dp, 'characterinfo.pabgh'))
-                app_hash, prefab_hash = _read_from_bytes(ci_body, ci_gh)
+                app_hash, prefab_hash, lookup_24, lookup_25, flag_c = _read_from_bytes(ci_body, ci_gh)
         except Exception:
             pass
 
-        # Priority 2: vanilla_tables on disk (updated each game version by the tool)
+        # Priority 2: vanilla_tables on disk
         if not app_hash:
             try:
                 import os
                 vt_dir = os.path.join(os.path.dirname(__file__), '..', '..', '..', '..',
                                       'vanilla_tables')
                 vt_dir = os.path.normpath(vt_dir)
-                body_path = os.path.join(vt_dir, 'characterinfo.pabgb')
-                gh_path   = os.path.join(vt_dir, 'characterinfo.pabgh')
+                body_path = os.path.join(vt_dir, 'vanilla_tables', 'characterinfo.pabgb')
+                gh_path   = os.path.join(vt_dir, 'vanilla_tables', 'characterinfo.pabgh')
                 if os.path.exists(body_path) and os.path.exists(gh_path):
                     with open(body_path, 'rb') as f: ci_body = f.read()
                     with open(gh_path,   'rb') as f: ci_gh   = f.read()
-                    app_hash, prefab_hash = _read_from_bytes(ci_body, ci_gh)
+                    app_hash, prefab_hash, lookup_24, lookup_25, flag_c = _read_from_bytes(ci_body, ci_gh)
             except Exception:
                 pass
 
-        # Priority 3: known 1.07 fallback (update comment when PA changes them)
+        # Priority 3: verified 1.07 fallback values (document_kliff_hashes.rs)
         if not app_hash:
-            app_hash    = 1767116530  # Damian _upperActionChartPackageGroupName 1.07
-            prefab_hash = 3755051597  # Damian _lowerActionChartPackageGroupName 1.07
+            app_hash    = 1767116530   # hash("Player_PHW")
+            prefab_hash = 3755051597   # hash("Player_PHW_Lower")
+            lookup_24   = 2831867940   # hash("character/model/1_pc/2_phw/phw_01.pab")
+            lookup_25   = 3511542393   # hash(".../cd_phw_00_nude_00_0001.pabc")
+            flag_c      = 2            # gender enum: 2 = Damiane/PHW
 
         targets = [
             ('Kliff',       1),
@@ -7227,6 +7244,12 @@ class ItemBuffsTab(QWidget):
                             'field': 'appearance_name',       'op': 'set', 'new': app_hash})
             intents.append({'entry': entry, 'key': key,
                             'field': 'character_prefab_path', 'op': 'set', 'new': prefab_hash})
+            intents.append({'entry': entry, 'key': key,
+                            'field': 'lookup_24',             'op': 'set', 'new': lookup_24})
+            intents.append({'entry': entry, 'key': key,
+                            'field': 'lookup_25',             'op': 'set', 'new': lookup_25})
+            intents.append({'entry': entry, 'key': key,
+                            'field': 'flag_c',                'op': 'set', 'new': flag_c})
         return intents
 
 
@@ -8622,12 +8645,18 @@ class ItemBuffsTab(QWidget):
             f"Note: weapons may lack animations on non-native characters.")
 
     def _stage_kliff_gun_fix(self, game_path: str) -> str:
-        """Copy Damian's upper action chart package and Oongka's gameplay data to Kliff.
+        """Copy Damian's appearance/model fields and Oongka's gameplay data to Kliff.
 
-        The dmm_parser field names are offset from the game's canonical names:
-          dmm 'appearance_name' = game '_upperActionChartPackageGroupName'
-          dmm 'character_prefab_path' = game '_lowerActionChartPackageGroupName'
-          dmm 'skeleton_name' = game '_characterGamePlayDataName'
+        Verified field values (document_kliff_hashes.rs):
+          appearance_name       = "Player_PHW"        hash = 1767116530
+          character_prefab_path = "Player_PHW_Lower"  hash = 3755051597
+          lookup_24             = PHW model .pab path hash = 2831867940
+          lookup_25             = PHW skeleton .pabc path hash = 3511542393
+          flag_c                = 2  (gender enum: 2 = Damiane/PHW)
+          skeleton_name         = Oongka's gameplay data name
+
+        All 5 appearance fields must be copied together — without lookup_24/25
+        the game has no model path to load and the gun mesh is invisible.
         """
         try:
             import crimson_rs
@@ -8641,21 +8670,33 @@ class ItemBuffsTab(QWidget):
             if not all(n in by_name for n in ('Kliff', 'Damian', 'Oongka')):
                 return "\nKliff Gun Fix: could not find all 3 player chars."
 
-            kliff = by_name['Kliff']
+            kliff  = by_name['Kliff']
             damian = by_name['Damian']
             oongka = by_name['Oongka']
 
-            k_upper = kliff.get('appearance_name', 0)
-            d_upper = damian.get('appearance_name', 0)
-            k_gp = kliff.get('skeleton_name', 0)
-            o_gp = oongka.get('skeleton_name', 0)
+            d_appearance  = damian.get('appearance_name', 0)
+            d_prefab      = damian.get('character_prefab_path', 0)
+            d_lookup24    = damian.get('lookup_24', 0)
+            d_lookup25    = damian.get('lookup_25', 0)
+            d_flag_c      = damian.get('flag_c', 0)
+            o_gameplay    = oongka.get('skeleton_name', 0)
 
-            if k_upper == d_upper and k_gp == o_gp:
+            # Check if Kliff already has all the Damian appearance fields
+            already = (
+                kliff.get('appearance_name', 0) == d_appearance and
+                kliff.get('skeleton_name', 0)   == o_gameplay
+            )
+            if already:
                 log.info("Kliff gun fix: fields already match, skipping")
                 return "\nKliff Gun Fix: not needed (fields already match)."
 
-            kliff['appearance_name'] = d_upper
-            kliff['skeleton_name'] = o_gp
+            # Copy all 5 Damian appearance fields + Oongka's gameplay data name
+            kliff['appearance_name']       = d_appearance
+            kliff['character_prefab_path'] = d_prefab
+            kliff['lookup_24']             = d_lookup24
+            kliff['lookup_25']             = d_lookup25
+            kliff['flag_c']                = d_flag_c
+            kliff['skeleton_name']         = o_gameplay
 
             new_pabgb = bytes(dmm_parser.serialize_table('character_info', items))
 
@@ -8665,11 +8706,16 @@ class ItemBuffsTab(QWidget):
             self._staged_charinfo_files['characterinfo.pabgh'] = ci_gh
             self._buff_modified = True
 
-            log.info("Kliff gun fix staged: upperAC=0x%08X from Damian, "
-                     "gamePlay=0x%08X from Oongka", d_upper, o_gp)
+            log.info("Kliff gun fix staged: appearance=0x%08X prefab=0x%08X "
+                     "lk24=0x%08X lk25=0x%08X flag_c=%d gameplay=0x%08X",
+                     d_appearance, d_prefab, d_lookup24, d_lookup25, d_flag_c, o_gameplay)
             return (f"\nKliff Gun Fix: staged"
-                    f"\n  upperActionChart <- Damian (0x{d_upper:08X})"
-                    f"\n  gamePlayData <- Oongka (0x{o_gp:08X})")
+                    f"\n  appearance_name       <- Damian (0x{d_appearance:08X})"
+                    f"\n  character_prefab_path <- Damian (0x{d_prefab:08X})"
+                    f"\n  lookup_24 (model)     <- Damian (0x{d_lookup24:08X})"
+                    f"\n  lookup_25 (skel var)  <- Damian (0x{d_lookup25:08X})"
+                    f"\n  flag_c (gender)       <- Damian ({d_flag_c})"
+                    f"\n  skeleton_name         <- Oongka (0x{o_gameplay:08X})")
         except Exception as e:
             log.exception("Kliff gun fix failed")
             return f"\nKliff Gun Fix failed: {e}"

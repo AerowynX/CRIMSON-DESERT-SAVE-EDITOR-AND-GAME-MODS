@@ -58,6 +58,11 @@ class SkillTreeTab(QWidget):
         self._original_grp_pabgb: bytes = b""
         self._loaded = False
 
+        # UI state — skilltreeinfo combo table + preset buttons
+        self._table: 'QTableWidget | None' = None
+        self._preset_btns: list = []
+        self._root_combos: dict = {}
+
         # Parser state — skillinfo (skill.pabgb stamina/cooldown editor)
         self._skill_entries: list[dict] = []
         self._skill_vanilla_entries: list[dict] = []
@@ -116,6 +121,75 @@ class SkillTreeTab(QWidget):
         top_row.addWidget(self._btn_restore)
 
         root.addLayout(top_row)
+
+        # ═══════════════════════════════════════════════════════════════
+        # Cross-Character Skill Swap  (skilltreeinfo.pabgb)
+        # ═══════════════════════════════════════════════════════════════
+        swap_grp = QGroupBox("Cross-Character Skill Swap (skilltreeinfo.pabgb)")
+        swap_grp.setStyleSheet(
+            f"QGroupBox {{ font-weight: bold; color: {COLORS['accent']}; "
+            f"border: 1px solid {COLORS.get('border', '#555')}; "
+            f"border-radius: 4px; margin-top: 8px; padding-top: 14px; }}"
+            f"QGroupBox::title {{ subcontrol-origin: margin; left: 10px; }}"
+        )
+        swap_layout = QVBoxLayout(swap_grp)
+
+        # Preset buttons row
+        preset_btn_row = QHBoxLayout()
+        preset_btn_row.addWidget(QLabel("Presets:"))
+
+        from skilltreeinfo_parser import CHAR_MELEE_ROOT
+        for label, color, tip, swaps in [
+            ("Kliff = Oongka",   "#00695C",
+             "Give Kliff the Oongka melee moveset.",
+             {50: CHAR_MELEE_ROOT[51]}),
+            ("Kliff = Damiane",  "#00695C",
+             "Give Kliff the Damiane melee moveset.",
+             {50: CHAR_MELEE_ROOT[52]}),
+            ("Oongka = Kliff",   "#1565C0",
+             "Give Oongka the Kliff melee moveset.",
+             {51: CHAR_MELEE_ROOT[50]}),
+            ("Oongka = Damiane", "#1565C0",
+             "Give Oongka the Damiane melee moveset.",
+             {51: CHAR_MELEE_ROOT[52]}),
+            ("Damiane = Kliff",  "#6A1B9A",
+             "Give Damiane the Kliff melee moveset.",
+             {52: CHAR_MELEE_ROOT[50]}),
+            ("Damiane = Oongka", "#6A1B9A",
+             "Give Damiane the Oongka melee moveset.",
+             {52: CHAR_MELEE_ROOT[51]}),
+            ("Reset All",       "#B71C1C",
+             "Restore all characters to their native movesets.",
+             None),
+        ]:
+            btn = self._make_preset_btn(label, color, tip, swaps)
+            preset_btn_row.addWidget(btn)
+
+        preset_btn_row.addStretch()
+        swap_layout.addLayout(preset_btn_row)
+
+        # Skill tree table
+        self._table = QTableWidget()
+        self._table.setColumnCount(6)
+        self._table.setHorizontalHeaderLabels(
+            ["Key", "Name", "Character", "Category", "Size", "Melee Root"])
+        th = self._table.horizontalHeader()
+        th.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        th.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
+        self._table.setSelectionBehavior(
+            QTableWidget.SelectionBehavior.SelectRows)
+        self._table.setEditTriggers(
+            QTableWidget.EditTrigger.NoEditTriggers)
+        self._table.setAlternatingRowColors(True)
+        self._table.setMaximumHeight(260)
+        swap_layout.addWidget(self._table)
+
+        swap_status = QLabel("Click 'Extract from Game' to load skill tree entries.")
+        swap_status.setStyleSheet(f"color: {COLORS['text_dim']}; font-size: 11px;")
+        swap_layout.addWidget(swap_status)
+        self._lbl_swap_status = swap_status
+
+        root.addWidget(swap_grp)
 
         # ═══════════════════════════════════════════════════════════════
         # Skill Editor — Stamina & Cooldown Mods  (skill.pabgb)
@@ -181,7 +255,36 @@ class SkillTreeTab(QWidget):
         preset_row.addStretch()
         sg_layout.addLayout(preset_row)
 
-        # --- bulk skill mod buttons ---
+        # --- regen multiplier row ---
+        regen_row = QHBoxLayout()
+        regen_row.setSpacing(4)
+        regen_lbl = QLabel("Regen Boost:")
+        regen_lbl.setStyleSheet(f"color: {COLORS['accent']}; font-weight: bold;")
+        regen_row.addWidget(regen_lbl)
+
+        self._regen_spin = QSpinBox()
+        self._regen_spin.setRange(2, 10)
+        self._regen_spin.setValue(2)
+        self._regen_spin.setSuffix("×")
+        self._regen_spin.setFixedWidth(60)
+        self._regen_spin.setToolTip("Multiplier for stamina/spirit regeneration rate (2×–10×)")
+        regen_row.addWidget(self._regen_spin)
+
+        regen_btn = QPushButton("Apply Regen Boost")
+        regen_btn.setToolTip(
+            "Multiply only stamina/spirit REGENERATION values by the selected factor.\n"
+            "Costs (roll, dash, fly, combat skills) are unchanged.\n"
+            "Load SkillInfo first.")
+        regen_btn.setStyleSheet(
+            "QPushButton { background-color: #00695C; color: white; "
+            "font-weight: bold; padding: 4px 10px; }")
+        regen_btn.clicked.connect(self._on_regen_boost)
+        regen_row.addWidget(regen_btn)
+
+        regen_row.addStretch()
+        sg_layout.addLayout(regen_row)
+
+
         bulk_row = QHBoxLayout()
         bulk_row.setSpacing(4)
         bulk_lbl = QLabel("Bulk Mods:")
@@ -289,12 +392,18 @@ class SkillTreeTab(QWidget):
         for btn in self._preset_btns:
             btn.setEnabled(True)
         self._btn_apply.setEnabled(True)
+        n = len(self._records)
+        if hasattr(self, '_lbl_swap_status'):
+            self._lbl_swap_status.setText(
+                f"{n} skill tree entries loaded — use combo boxes to redirect movesets.")
         self.status_message.emit(
-            f"Loaded {len(self._records)} skill tree entries "
+            f"Loaded {n} skill tree entries "
             f"({len(self._original_pabgb)} bytes)"
         )
 
     def _populate_table(self) -> None:
+        if self._table is None:
+            return
         from skilltreeinfo_parser import ROOT_PACKAGES, CHAR_MELEE_ROOT
 
         self._table.setRowCount(len(self._records))
@@ -1305,6 +1414,62 @@ class SkillTreeTab(QWidget):
 
     _STAMINA_HASH = 1000026
 
+    def _on_regen_boost(self) -> None:
+        """Multiply only stamina/spirit REGENERATION (positive d values) by the
+        selected factor. Costs (negative d values) are left unchanged."""
+        if not self._skill_loaded:
+            self._on_skill_load()
+        if not self._skill_loaded:
+            return
+
+        factor = self._regen_spin.value()
+
+        try:
+            import dmm_parser, copy
+            dmm_items = dmm_parser.parse_table(
+                'skill_info', self._skill_pabgb, self._skill_pabgh)
+            vanilla_items = copy.deepcopy(dmm_items)
+        except Exception as e:
+            QMessageBox.critical(self, "Regen Boost",
+                f"dmm_parser failed:\n{e}")
+            return
+
+        regen_count = 0
+        dirty_keys: set = set()
+
+        for it in dmm_items:
+            hit = False
+            for list_key in ('use_resource_stat_list', 'use_driver_resource_stat_list'):
+                for r in (it.get(list_key) or []):
+                    if not isinstance(r, dict):
+                        continue
+                    d = r.get('d', 0)
+                    if isinstance(d, int) and d > 2**63:
+                        d = d - 2**64
+                    # Only boost POSITIVE values (restoration/regen)
+                    # Negative values are costs — leave them alone
+                    if d > 0:
+                        r['d'] = int(d * factor)
+                        regen_count += 1
+                        hit = True
+            if hit:
+                dirty_keys.add(it.get('key', 0))
+
+        new_pabgb = bytes(dmm_parser.serialize_table('skill_info', dmm_items))
+        self._skill_pabgb = new_pabgb
+        self._skill_entries = dmm_items
+        self._skill_dirty_keys.update(dirty_keys)
+
+        # Do NOT overwrite _skill_vanilla_entries — it must always reflect
+        # the original game data so the export diff is cumulative across
+        # multiple preset applications (stamina + regen, etc.)
+        self._skill_loaded = True
+        self._btn_skill_export.setEnabled(True)
+
+        self._lbl_skill_status.setText(
+            f"Regen Boost {factor}×: {regen_count} regen values boosted "
+            f"across {len(dirty_keys)} skills.")
+
     def _on_stamina_preset(self, factor: float) -> None:
         """One-click stamina preset using dmm_parser for full field access.
         Zeros positive resource costs and stamina drain buffs.
@@ -1337,15 +1502,12 @@ class SkillTreeTab(QWidget):
                     d = r.get('d', 0)
                     if isinstance(d, int) and d > 2**63:
                         d = d - 2**64
-                    # Scale ALL non-zero costs — both positive (regen/idle drain) and
-                    # negative (actual stamina costs: roll, dash, fly, climb, swim,
-                    # combat skills). Previous code only handled d > 0, missing everything.
-                    if d != 0:
+                    # Only scale NEGATIVE values (stamina costs: roll, dash, fly,
+                    # climb, swim, combat skills). Positive values are regen/restore
+                    # and are handled independently by the Regen Boost button so
+                    # both presets can be combined without cancelling each other.
+                    if d < 0:
                         scaled = int(d * factor)
-                        # d is treated as signed for arithmetic but dmm_parser stores it
-                        # as u64. Convert negative results back to u64 two's-complement
-                        # so serialize_table doesn't fail (only Infinite/factor=0 avoided
-                        # this because 0 is always valid as u64).
                         if scaled < 0:
                             scaled = scaled + 2**64
                         r['d'] = scaled
@@ -1362,7 +1524,9 @@ class SkillTreeTab(QWidget):
                         val = body.get(fk, 0)
                         if isinstance(val, int) and val > 2**63:
                             val = val - 2**64
-                        if isinstance(val, (int, float)) and val != 0:
+                        # Only scale negative values (costs). Positive values
+                        # are regen — leave them for the Regen Boost button.
+                        if isinstance(val, (int, float)) and val < 0:
                             scaled_fk = int(val * factor)
                             if scaled_fk < 0:
                                 scaled_fk = scaled_fk + 2**64

@@ -3758,6 +3758,7 @@ class ItemBuffsTab(QWidget):
                 gi_display = f"{gi}  ({_gn})" if _gn else str(gi)
                 c2 = QTableWidgetItem(gi_display)
                 c2.setFont(QFont("Consolas", 10))
+                c2.setToolTip(gi_display)
                 c2.setForeground(QBrush(QColor("#FF8A65")))
                 table.setRowCount(row + 1)
                 table.setItem(row, 0, c1)
@@ -3797,57 +3798,70 @@ class ItemBuffsTab(QWidget):
                 table.setItem(row, 1, QTableWidgetItem(""))
                 table.setSpan(row, 0, 1, 2)
                 row += 1
-                for gv in gvpl:
+                sr = getattr(self, '_string_resolver', None)
+                for idx, gv in enumerate(gvpl):
                     prefabs = gv.get('prefab_names', [])
-                    anim = gv.get('animation_path_list', [])
-                    tag = gv.get('tag_name_hash', 0)
-                    scale = gv.get('scale', [])
+                    anim    = gv.get('animation_path_list', [])
+                    tag     = gv.get('tag_name_hash', 0)
+                    scale   = gv.get('scale', [])
                     use_gimmick = gv.get('use_gimmick_prefab', 0)
-                    sr = getattr(self, '_string_resolver', None)
-                    tag_label = 'default (no filter)' if tag == 0 else (
-                        sr.label(tag, '{name}', f'0x{tag:08X}') if sr else f'0x{tag:08X}')
-                    # Header row for this visual entry
-                    c1 = QTableWidgetItem(f"  tag: {tag_label}")
-                    c1.setForeground(QBrush(QColor("#FF8A65")))
-                    meta = []
+
+                    # Resolve tag to readable name
+                    if tag == 0:
+                        tag_label = 'default'
+                    elif sr:
+                        tag_label = sr.label(tag, '{name}', f'0x{tag:08X}')
+                    else:
+                        tag_label = f'0x{tag:08X}'
+
+                    # Resolve first prefab path for summary
+                    first_prefab = ''
+                    if prefabs and sr:
+                        resolved = sr.resolve(prefabs[0])
+                        if resolved:
+                            # Show just the filename part
+                            first_prefab = resolved.split('/')[-1].split('\\')[-1]
+                        else:
+                            first_prefab = f'0x{prefabs[0]:08X}'
+                    elif prefabs:
+                        first_prefab = f'0x{prefabs[0]:08X}'
+
+                    # Build summary value: "prefab_name  [+N more] [scale=x] [anim]"
+                    summary_parts = []
+                    if first_prefab:
+                        extra = f'  +{len(prefabs)-1} more' if len(prefabs) > 1 else ''
+                        summary_parts.append(f'{first_prefab}{extra}')
+                    if anim:
+                        summary_parts.append(f'{len(anim)} anim(s)')
                     if scale and any(v != 1.0 for v in scale):
-                        meta.append(f"scale={','.join(f'{v:.2f}' for v in scale)}")
+                        summary_parts.append(f"scale={','.join(f'{v:.2f}' for v in scale)}")
                     if use_gimmick:
-                        meta.append("use_gimmick_prefab")
-                    c2 = QTableWidgetItem(f"{len(prefabs)} prefab(s)" +
-                                          (f"  [{', '.join(meta)}]" if meta else ""))
-                    c2.setFont(QFont("Consolas", 10))
-                    c2.setForeground(QBrush(QColor("#FF8A65")))
+                        summary_parts.append('use_gimmick_prefab')
+                    summary = '  |  '.join(summary_parts) if summary_parts else '(empty)'
+
+                    # Build full tooltip with all resolved paths
+                    tooltip_lines = [f'Visual entry {idx}  tag: {tag_label}']
+                    for ph in prefabs:
+                        p_str = (sr.resolve(ph) if sr else None) or f'0x{ph:08X}'
+                        tooltip_lines.append(f'  prefab: {p_str}')
+                    for ah in anim:
+                        a_str = (sr.resolve(ah) if sr else None) or f'0x{ah:08X}'
+                        tooltip_lines.append(f'  anim:   {a_str}')
+                    if scale:
+                        tooltip_lines.append(f'  scale:  {scale}')
+                    tooltip = '\n'.join(tooltip_lines)
+
+                    c1 = QTableWidgetItem(f"  visual  tag: {tag_label}")
+                    c1.setForeground(QBrush(QColor("#FF8A65")))
+                    c1.setToolTip(tooltip)
+                    c2 = QTableWidgetItem(summary)
+                    c2.setFont(QFont("Consolas", 9))
+                    c2.setForeground(QBrush(QColor("#BCAAA4")))
+                    c2.setToolTip(tooltip)
                     table.setRowCount(row + 1)
                     table.setItem(row, 0, c1)
                     table.setItem(row, 1, c2)
                     row += 1
-                    # One row per resolved prefab path
-                    for ph in prefabs:
-                        path_str = sr.resolve(ph) if sr else None
-                        label = path_str if path_str else f'key: 0x{ph:08X}'
-                        cp1 = QTableWidgetItem(f"    prefab")
-                        cp1.setForeground(QBrush(QColor("#FF8A65")))
-                        cp2 = QTableWidgetItem(label)
-                        cp2.setFont(QFont("Consolas", 9))
-                        cp2.setForeground(QBrush(QColor("#BCAAA4")))
-                        table.setRowCount(row + 1)
-                        table.setItem(row, 0, cp1)
-                        table.setItem(row, 1, cp2)
-                        row += 1
-                    # Animation paths if present
-                    for ah in anim:
-                        anim_str = sr.resolve(ah) if sr else None
-                        alabel = anim_str if anim_str else f'key: 0x{ah:08X}'
-                        ca1 = QTableWidgetItem(f"    anim")
-                        ca1.setForeground(QBrush(QColor("#FF8A65")))
-                        ca2 = QTableWidgetItem(alabel)
-                        ca2.setFont(QFont("Consolas", 9))
-                        ca2.setForeground(QBrush(QColor("#BCAAA4")))
-                        table.setRowCount(row + 1)
-                        table.setItem(row, 0, ca1)
-                        table.setItem(row, 1, ca2)
-                        row += 1
 
             if edl:
                 display_level = 0
@@ -6715,11 +6729,13 @@ class ItemBuffsTab(QWidget):
         BUFF_LEVEL = 10
         edl = rust_info.get('enchant_data_list', [])
         if not edl:
-            # Create a minimal enchant_data_list if none exists
-            edl = [{'enchant_stat_data': {'stat_list_static': [], 'stat_list_static_level': [],
-                                           'max_stat_list': [], 'regen_stat_list': []},
-                    'equip_buffs': []}]
-            rust_info['enchant_data_list'] = edl
+            QMessageBox.warning(self, "No Fall Damage",
+                f"{display_name} has no enchant data.\n\n"
+                "Add at least one stat (e.g. DDD=0) to the item first so it has\n"
+                "an enchant_data_list entry, then apply No Fall Damage.\n\n"
+                "This ensures the export only sets equip_buffs without wiping\n"
+                "existing enchant stats on the item.")
+            return
 
         modified_levels = 0
         for ed in edl:

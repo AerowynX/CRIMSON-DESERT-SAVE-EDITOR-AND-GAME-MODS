@@ -3683,6 +3683,7 @@ class FieldEditTab(QWidget):
 
             intents = []
             skipped = []
+            wild_targets = []
             for sw in queue:
                 try:
                     tgt_ck = int(sw["tgt"])
@@ -3743,12 +3744,47 @@ class FieldEditTab(QWidget):
                     "_comment": f"mesh swap: appearance from {src_name or src_ck}",
                 })
 
+                # Track wild-animal targets — they share the appearance_name
+                # field with rideable mounts but are different entity types.
+                # The game engine crashes at runtime when a wild entity is
+                # rendered with a rideable-mount appearance (different
+                # animation states, vtable slots, attachment points).
+                tgt_str_key = tgt_e.get("string_key", tgt_name)
+                if "Wild" in tgt_str_key or "wild" in tgt_str_key:
+                    wild_targets.append(tgt_str_key)
+
             if not intents:
                 msg = "No field-level differences found."
                 if skipped:
                     msg += f"\n\nSkipped: {', '.join(skipped)}"
                 QMessageBox.warning(dlg, tr("Export Field JSON v3"), msg)
                 return
+
+            # Warn if any targets are wild animals — swapping their
+            # appearance_name to a rideable mount's appearance causes a
+            # game crash at runtime. Wild entities and mount entities are
+            # different engine types; the appearance data is not compatible.
+            if wild_targets:
+                from PyQt5.QtWidgets import QMessageBox as _QMB
+                warn_msg = (
+                    f"⚠️  {len(wild_targets)} target(s) are wild animal entries:\n\n"
+                    + "\n".join(f"  • {n}" for n in wild_targets)
+                    + "\n\nSwapping a wild animal's appearance to a rideable mount "
+                    "appearance causes a game crash at runtime. Wild entities and "
+                    "mount entities use different engine structures (animations, "
+                    "attachment points, vtable slots) that are not cross-compatible."
+                    "\n\nTo make wild horses look like a mount, target the tamed/"
+                    "rideable variant of the entry instead."
+                    "\n\nProceed anyway?"
+                )
+                btn_warn = QMessageBox.warning(
+                    dlg, tr("Wild Animal Target — Crash Risk"),
+                    warn_msg,
+                    QMessageBox.Yes | QMessageBox.Cancel,
+                    QMessageBox.Cancel,
+                )
+                if btn_warn != QMessageBox.Yes:
+                    return
             path, _ = QFileDialog.getSaveFileName(
                 dlg, tr("Export Field JSON v3"),
                 "mesh_swap.field.json",

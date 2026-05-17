@@ -3824,7 +3824,7 @@ class DropsetTab(QWidget):
             return
 
         pct = self._dropset_bulk_rate.value()
-        rate = pct * 10000
+        rate = int(pct * 10000)
         self._dropset_editor.boost_rates(ds, rate=rate)
         self._dropset_mark_modified()
         self._dropset_refresh_items(ds)
@@ -3839,7 +3839,7 @@ class DropsetTab(QWidget):
             return
 
         qty = self._dropset_bulk_qty.value()
-        self._dropset_editor.boost_quantities(ds, min_qty=qty, max_qty=qty)
+        self._dropset_editor.boost_quantities(ds, min_qty=int(qty), max_qty=int(qty))
         self._dropset_mark_modified()
         self._dropset_refresh_items(ds)
         name = ds.name or f"key={ds.key}"
@@ -4049,8 +4049,8 @@ class DropsetTab(QWidget):
         pct = self._dropset_bulk_rate.value()
         qty = self._dropset_bulk_qty.value()
         name = ds.name or f"key={ds.key}"
-        self._dropset_editor.boost_rates(ds, rate=pct * 10000)
-        self._dropset_editor.boost_quantities(ds, min_qty=qty, max_qty=qty)
+        self._dropset_editor.boost_rates(ds, rate=int(pct * 10000))
+        self._dropset_editor.boost_quantities(ds, min_qty=int(qty), max_qty=int(qty))
         self._dropset_mark_modified()
         self._dropset_refresh_items(ds)
         self._dropset_status.setText(f"Boosted {name}: {pct}% rate, x{qty} qty")
@@ -4696,9 +4696,9 @@ class DropsetTab(QWidget):
         added = 0
         for item in items:
             rate = int(item.get("rate_pct", 100) * 10000)
-            qty = item.get("qty", 1)
+            qty = int(item.get("qty", 1))
             self._dropset_editor.add_item(
-                ds, item["item_key"], rate=rate, min_qty=qty, max_qty=qty)
+                ds, int(item["item_key"]), rate=rate, min_qty=qty, max_qty=qty)
             added += 1
 
         self._dropset_mark_modified()

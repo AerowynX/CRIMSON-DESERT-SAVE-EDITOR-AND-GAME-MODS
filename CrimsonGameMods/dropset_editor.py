@@ -250,13 +250,13 @@ class DropsetEditor:
 
     def boost_rates(self, ds: DropSet, rate: int = MAX_RATE):
         for drop in ds.drops:
-            drop.rates = rate
-            drop.rates_100 = rate // 10000
+            drop.rates = int(rate)
+            drop.rates_100 = int(rate) // 10000
 
     def boost_quantities(self, ds: DropSet, min_qty: int = 10, max_qty: int = 20):
         for drop in ds.drops:
-            drop.max_amt = max(0, min_qty)
-            drop.min_amt = max(0, max_qty)
+            drop.max_amt = max(0, int(min_qty))
+            drop.min_amt = max(0, int(max_qty))
 
     def swap_item(self, ds: DropSet, old_key: int, new_key: int):
         for drop in ds.drops:
@@ -275,18 +275,18 @@ class DropsetEditor:
 
         new_drop = ItemDrop(
             flag=template_drop.flag if template_drop else 1,
-            item_key=item_key,
+            item_key=int(item_key),
             unk3=template_drop.unk3 if template_drop else 0,
             unk4=0,
             unk1_flag=template_drop.unk1_flag if template_drop else b'\x00' * 5,
             unk_cond_flag=template_drop.unk_cond_flag if template_drop else 0xFFFFFFFF,
-            rates=rate,
-            rates_100=rate // 10000,
+            rates=int(rate),
+            rates_100=int(rate) // 10000,
             unk2=0,
-            max_amt=min_qty,
-            min_amt=max_qty,
+            max_amt=int(min_qty),
+            min_amt=int(max_qty),
             unk3_flags=0xFFFF,
-            item_key_dup=item_key,
+            item_key_dup=int(item_key),
             body_offset=0,
             size=64,
         )

@@ -2242,7 +2242,7 @@ class ItemBuffsTab(QWidget):
         tl.setSpacing(6)
         tl.setContentsMargins(10, 14, 10, 10)
 
-        # Row 1: No Cooldown
+        # Row 1: No Cooldown + Max Enchant
         row1 = QHBoxLayout()
         row1.setSpacing(6)
         no_cd_btn = QPushButton("No Cooldown")
@@ -2251,6 +2251,13 @@ class ItemBuffsTab(QWidget):
             "in the next Apply / Export. Same as Pldada's No Cooldown mod.")
         no_cd_btn.clicked.connect(self._cd_patch_all_items)
         row1.addWidget(no_cd_btn)
+        max_ench_btn = QPushButton("Max Enchant All Items (+10)")
+        max_ench_btn.setToolTip(
+            "Set drop_enchant_level to +10 on every item that supports enchantment. "
+            "Non-enchantable items (consumables, quest items, etc.) are skipped. "
+            "Takes effect on fresh copies — export Field JSON v3 to write.")
+        max_ench_btn.clicked.connect(self._eb_set_all_enchant_max)
+        row1.addWidget(max_ench_btn)
         row1.addStretch(1)
         tl.addLayout(row1)
 
@@ -7447,6 +7454,36 @@ class ItemBuffsTab(QWidget):
         self._buff_status_label.setText(
             f"Refinement level of {display_name} set to {drop_level} on drop. "
             f"Export Field JSON v3 to write.")
+
+    def _eb_set_all_enchant_max(self) -> None:
+        """Set drop_enchant_level=10 on every item that already has enchant support."""
+        if not hasattr(self, '_buff_rust_items') or self._buff_rust_items is None:
+            QMessageBox.warning(self, "Set All Enchant", "Extract with Rust parser first.")
+            return
+
+        updated = 0
+        skipped = 0
+        for rust_info in self._buff_rust_items:
+            ddd = rust_info.get('drop_default_data')
+            if not ddd:
+                skipped += 1
+                continue
+            if not ddd.get('drop_enchant_level'):
+                # Item exists but has no enchant support — skip silently
+                skipped += 1
+                continue
+            ddd['drop_enchant_level'] = 10
+            updated += 1
+
+        if updated == 0:
+            QMessageBox.information(self, "Set All Enchant",
+                "No enchantable items found. Extract iteminfo first.")
+            return
+
+        self._buff_modified = True
+        self._buff_status_label.setText(
+            f"Set drop enchant level to +10 on {updated} enchantable items "
+            f"({skipped} non-enchantable skipped). Export Field JSON v3 to write.")
 
     def _eb_extend_sockets(self) -> None:
         if not hasattr(self, '_buff_rust_items') or self._buff_rust_items is None:

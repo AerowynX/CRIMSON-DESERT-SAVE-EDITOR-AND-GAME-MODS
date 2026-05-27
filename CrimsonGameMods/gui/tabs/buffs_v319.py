@@ -1042,9 +1042,17 @@ class ItemBuffsTab(QWidget):
             os.path.join(_here, 'data'),
             _root,
             os.path.join(_root, 'data'),
+            # Repo also ships community-curated lookups under dist/ (the
+            # buff_names_community.json file in particular). Without this
+            # path the loader misses every community-mapped buff name
+            # (Crow's Pursuit, Hound's Claws, Crow Storm, ...) and the
+            # dropdown falls back to the stale seed dict + internal names.
+            os.path.join(_root, 'dist'),
             os.path.join(getattr(sys, '_MEIPASS', ''), 'data'),
+            os.path.join(getattr(sys, '_MEIPASS', ''), 'dist'),
             getattr(sys, '_MEIPASS', ''),
             os.path.join(os.getcwd(), 'data'),
+            os.path.join(os.getcwd(), 'dist'),
             os.getcwd(),
         ]
 
@@ -1911,7 +1919,7 @@ class ItemBuffsTab(QWidget):
         no_fall_btn = QPushButton("No Fall Damage")
         no_fall_btn.setToolTip(
             "Adds fall damage reduction buff to the selected item.\n"
-            "Sets equip_buffs: BuffLevel_Food_FallDamageReduce (1000185) level 10\n"
+            "Sets equip_buffs: BuffLevel_FallDamageReduce (1000190) level 10\n"
             "on all enchant levels, and stages buffinfo changes so the reduction\n"
             "values export correctly via Export Field JSON v3.")
         no_fall_btn.clicked.connect(self._eb_apply_no_fall_damage)
@@ -6776,8 +6784,8 @@ class ItemBuffsTab(QWidget):
     def _eb_apply_no_fall_damage(self) -> None:
         """Apply No Fall Damage buff to the selected item.
 
-        Adds equip_buffs: [{buff: 1000185, level: 10}] to every enchant level
-        on the selected item (BuffLevel_Food_FallDamageReduce at max level),
+        Adds equip_buffs: [{buff: 1000190, level: 10}] to every enchant level
+        on the selected item (BuffLevel_FallDamageReduce at max level),
         and stages buffinfo changes so Export Field JSON v3 includes both
         the iteminfo equip_buffs change and the buffinfo reduction values.
         """
@@ -6797,7 +6805,7 @@ class ItemBuffsTab(QWidget):
         reply = QMessageBox.question(
             self, "No Fall Damage",
             f"Apply No Fall Damage buff to {display_name}?\n\n"
-            f"Adds equip_buff: BuffLevel_Food_FallDamageReduce (1000185) level 10\n"
+            f"Adds equip_buff: BuffLevel_FallDamageReduce (1000190) level 10\n"
             f"to all enchant levels on the item.\n\n"
             f"Also stages buffinfo.pabgb changes (exported via Export Field JSON v3).",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
@@ -6806,7 +6814,10 @@ class ItemBuffsTab(QWidget):
             return
 
         # Add equip_buff to every enchant level
-        BUFF_ID = 1000185
+        # Must match FALL_KEY below — buff 1000190 is the equip variant
+        # (BuffLevel_FallDamageReduce); 1000185 is the Food category variant
+        # and won't trigger when applied via equip_buffs.
+        BUFF_ID = 1000190
         BUFF_LEVEL = 10
         edl = rust_info.get('enchant_data_list', [])
         if not edl:

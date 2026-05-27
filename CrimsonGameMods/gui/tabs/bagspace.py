@@ -726,13 +726,13 @@ class BagSpaceTab(QWidget):
             if rec['default_slots'] != van['default_slots']:
                 intents.append({
                     'entry': name, 'key': rec.get('key', 0),
-                    'field': 'default_slots', 'op': 'set',
+                    'field': 'default_slot_count', 'op': 'set',
                     'new': rec['default_slots'],
                 })
             if rec['max_slots'] != van['max_slots']:
                 intents.append({
                     'entry': name, 'key': rec.get('key', 0),
-                    'field': 'max_slots', 'op': 'set',
+                    'field': 'max_slot_count', 'op': 'set',
                     'new': rec['max_slots'],
                 })
 
@@ -790,11 +790,15 @@ class BagSpaceTab(QWidget):
                 skipped += 1
                 continue
             field = intent.get('field', '')
-            if intent.get('op') != 'set' or field not in ('default_slots', 'max_slots'):
+            # Accept both correct dmm-parser names and legacy internal names
+            if intent.get('op') != 'set' or field not in (
+                'default_slot_count', 'max_slot_count',
+                'default_slots', 'max_slots',
+            ):
                 skipped += 1
                 continue
             val = int(intent['new'])
-            offset_key = 'default_offset' if field == 'default_slots' else 'max_offset'
+            offset_key = 'default_offset' if 'default' in field else 'max_offset'
             struct.pack_into("<H", self._inventory_data, int(target[offset_key]), val)
             applied += 1
 
